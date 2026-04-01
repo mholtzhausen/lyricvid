@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/user/lyricvid/internal/audio"
 	"github.com/user/lyricvid/internal/config"
+	"github.com/user/lyricvid/internal/imagegen"
 	"github.com/user/lyricvid/internal/lyrics"
 	"github.com/user/lyricvid/internal/video"
 )
@@ -26,6 +28,13 @@ var (
 	transition         string
 	transitionDuration float64
 	lyricVPosition     float64
+
+	// imagegen flags
+	imagegenInspirationPath string
+	imagegenCount           int
+	imagegenAPIKey          string
+	imagegenQuality         string
+	imagegenStyle           string
 )
 
 func main() {
@@ -56,8 +65,25 @@ It supports LRC (timestamped) and plain text lyrics files.`,
 		RunE:  runSetGemini,
 	}
 
+	imagegenCmd := &cobra.Command{
+		Use:   "imagegen <mp3_file>",
+		Short: "Generate scene images from song lyrics using Gemini",
+		Args:  cobra.ExactArgs(1),
+		RunE:  runImagegen,
+	}
+	imagegenCmd.Flags().StringVar(&imagegenInspirationPath, "inspiration", "",
+		"Path to lyrics/text file for inspiration; auto-detected alongside audio if omitted")
+	imagegenCmd.Flags().IntVar(&imagegenCount, "count", 5, "Number of images to generate")
+	imagegenCmd.Flags().StringVar(&imagegenAPIKey, "api-key", "",
+		"Gemini API key (stored to ~/.lyricvid.yaml if not already saved)")
+	imagegenCmd.Flags().StringVar(&imagegenQuality, "quality", "480p",
+		"Output quality: 480p, 720p, 1080p, 1440p (16:9 aspect ratio)")
+	imagegenCmd.Flags().StringVar(&imagegenStyle, "style", "",
+		"Visual style/theme applied to every generated image (e.g. \"cinematic film noir, high contrast\")")
+
 	rootCmd.AddCommand(generateCmd)
 	rootCmd.AddCommand(setgeminiCmd)
+	rootCmd.AddCommand(imagegenCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -215,6 +241,72 @@ func runSetGemini(_ *cobra.Command, args []string) error {
 	}
 	fmt.Println("Gemini API key saved to ~/.lyricvid.yaml")
 	return nil
+}
+
+func runImagegen(_ *cobra.Command, args []string) error {
+	audioPath := args[0]
+
+	if err := validateFile(audioPath, []string{".mp3", ".m4a", ".flac", ".wav"}); err != nil {
+		return fmt.Errorf("audio: %w", err)
+	}
+
+	preset, ok := imagegen.QualityPresets[imagegenQuality]
+	if !ok {
+		return fmt.Errorf("unsupported quality %q; valid values: 480p, 720p, 1080p, 1440p", imagegenQuality)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if imagegenAPIKey != "" {
+		cfg.GeminiAPIKey = imagegenAPIKey
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Println("Gemini API key saved to ~/.lyricvid.yaml")
+	}
+	if cfg.GeminiAPIKey == "" {
+		return fmt.Errorf("no Gemini API key; use --api-key or run 'setgemini <key>'")
+	}
+
+	inspirationPath := imagegenInspirationPath
+	if inspirationPath == "" {
+		folder, stem := audioStem(audioPath)
+		for _, ext := range []string{".lrc", ".txt"} {
+			candidate := filepath.Join(folder, stem+ext)
+			if _, err := os.Stat(candidate); err == nil {
+				inspirationPath = candidate
+				fmt.Printf("Auto-detected inspiration: %s\n", inspirationPath)
+				break
+			}
+		}
+		if inspirationPath == "" {
+			return fmt.Errorf("no inspiration file found; provide one with --inspiration")
+		}
+	} else {
+		if err := validateFile(inspirationPath, []string{".lrc", ".txt"}); err != nil {
+			return fmt.Errorf("inspiration: %w", err)
+		}
+	}
+
+	inspirationText, err := os.ReadFile(inspirationPath)
+	if err != nil {
+		return fmt.Errorf("reading inspiration file: %w", err)
+	}
+
+	folder, _ := audioStem(audioPath)
+	outputDir := filepath.Join(folder, "images")
+
+	_ = preset // width/height available for future use (e.g. passing to generate cmd)
+	return imagegen.Generate(context.Background(), imagegen.Config{
+		APIKey:          cfg.GeminiAPIKey,
+		InspirationText: strings.TrimSpace(string(inspirationText)),
+		Count:           imagegenCount,
+		OutputDir:       outputDir,
+		ImageSize:       preset.ImageSize,
+		Style:           imagegenStyle,
+	})
 }
 
 func audioStem(audioPath string) (folder, stem string) {

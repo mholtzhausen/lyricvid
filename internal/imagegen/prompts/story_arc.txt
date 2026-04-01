@@ -1,0 +1,15 @@
+You are a visual storytelling assistant. Based on the following song lyrics or text,
+create a story arc of exactly {{.Count}} cinematic scene descriptions for AI image generation.
+{{- if .Style}}
+
+Visual style for all scenes: {{.Style}}
+{{- end}}
+
+Rules:
+- Output exactly {{.Count}} lines, numbered 1 through {{.Count}}.
+- Format each line: "1. ", "2. ", etc.
+- Each scene is a single vivid visual sentence{{if .Style}} consistent with the visual style above{{end}}.
+- No other text, headings, blank lines, or commentary.
+
+Lyrics/Text:
+{{.InspirationText}}

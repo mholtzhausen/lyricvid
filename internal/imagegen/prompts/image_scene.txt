@@ -1,0 +1,9 @@
+Generate a single cinematic still image for a music video. No text overlays.
+{{- if .Style}}
+
+Visual style: {{.Style}}
+Apply this style consistently.
+{{- end}}
+
+Scene description:
+{{.Scene}}
