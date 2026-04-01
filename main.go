@@ -35,6 +35,20 @@ var (
 	generateQuality string
 	aspectRatio     string
 
+	// fade-in flags
+	fadeInSeconds      float64
+	fadeInTitle        string
+	fadeInTitleFadeOut float64
+	fadeInFontSize     string // pipe-separated sizes
+	fadeInFontColor    string
+
+	// fade-out flags
+	fadeOutSeconds      float64
+	fadeOutTitle        string
+	fadeOutTitleFadeOut float64
+	fadeOutFontSize     string // pipe-separated sizes
+	fadeOutFontColor    string
+
 	// imagegen flags
 	imagegenInspirationPath string
 	imagegenCount           int
@@ -114,6 +128,18 @@ func addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&transition, "transition", "fade", "Transition between images: fade|fadeblack|fadewhite|dissolve|wipeleft|wiperight|wipeup|wipedown|slideleft|slideright|radial|pixelize|none")
 	cmd.Flags().Float64Var(&transitionDuration, "transition-duration", 3.0, "Duration of transition effect in seconds")
 	cmd.Flags().Float64Var(&lyricVPosition, "lyric-position", 0.65, "Vertical position of the focused lyric line (0.0=top, 1.0=bottom)")
+
+	cmd.Flags().Float64Var(&fadeInSeconds, "fade-in-seconds", 0, "Seconds to fade from black at the start; 0 = no fade-in")
+	cmd.Flags().StringVar(&fadeInTitle, "fade-in-title", "", "Title text shown during fade-in; use | to separate multiple lines")
+	cmd.Flags().Float64Var(&fadeInTitleFadeOut, "fade-in-title-fade-out", 1, "Seconds to fade out the title after the fade-in period ends")
+	cmd.Flags().StringVar(&fadeInFontSize, "fade-in-font-size", "60", "Font size(s) for fade-in title; use | to set per-line sizes (last size is the default for remaining lines)")
+	cmd.Flags().StringVar(&fadeInFontColor, "fade-in-font-color", "", "Font color for fade-in title (defaults to --font-color)")
+
+	cmd.Flags().Float64Var(&fadeOutSeconds, "fade-out-seconds", 0, "Seconds to fade to black at the end; 0 = no fade-out")
+	cmd.Flags().StringVar(&fadeOutTitle, "fade-out-title", "", "Title text shown during fade-out; use | to separate multiple lines")
+	cmd.Flags().Float64Var(&fadeOutTitleFadeOut, "fade-out-title-fade-out", 1, "Seconds to fade in the title before the fade-out period starts")
+	cmd.Flags().StringVar(&fadeOutFontSize, "fade-out-font-size", "60", "Font size(s) for fade-out title; use | to set per-line sizes (last size is the default for remaining lines)")
+	cmd.Flags().StringVar(&fadeOutFontColor, "fade-out-font-color", "", "Font color for fade-out title (defaults to --font-color)")
 }
 
 func runGenerate(cmd *cobra.Command, args []string) error {
@@ -259,6 +285,14 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  video       %dx%d  ·  font %dpt  ·  bg-dim %.2f  ·  transition %s\n\n",
 		width, height, fontSize, bgDim, transitionDesc)
 
+	// Resolve fade title font colors — default to --font-color
+	if !cmd.Flags().Changed("fade-in-font-color") {
+		fadeInFontColor = fontColor
+	}
+	if !cmd.Flags().Changed("fade-out-font-color") {
+		fadeOutFontColor = fontColor
+	}
+
 	// Render video
 	cfg := video.Config{
 		AudioPath:      audioPath,
@@ -275,6 +309,18 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		Transition:         transition,
 		TransitionDuration: transitionDuration,
 		LyricVPosition:     lyricVPosition,
+
+		FadeInSeconds:      fadeInSeconds,
+		FadeInTitle:        fadeInTitle,
+		FadeInTitleFadeOut: fadeInTitleFadeOut,
+		FadeInFontSizes:    parsePipeSizes(fadeInFontSize, 60),
+		FadeInFontColor:    fadeInFontColor,
+
+		FadeOutSeconds:      fadeOutSeconds,
+		FadeOutTitle:        fadeOutTitle,
+		FadeOutTitleFadeOut: fadeOutTitleFadeOut,
+		FadeOutFontSizes:    parsePipeSizes(fadeOutFontSize, 60),
+		FadeOutFontColor:    fadeOutFontColor,
 	}
 
 	return video.Render(cfg)
@@ -386,6 +432,29 @@ func audioStem(audioPath string) (folder, stem string) {
 	base := filepath.Base(audioPath)
 	stem = strings.TrimSuffix(base, filepath.Ext(base))
 	return
+}
+
+func parsePipeSizes(s string, defaultSize int) []int {
+	if s == "" {
+		return []int{defaultSize}
+	}
+	parts := strings.Split(s, "|")
+	var sizes []int
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		n, err := strconv.Atoi(p)
+		if err != nil || n <= 0 {
+			n = defaultSize
+		}
+		sizes = append(sizes, n)
+	}
+	if len(sizes) == 0 {
+		return []int{defaultSize}
+	}
+	return sizes
 }
 
 func validateFile(path string, allowedExts []string) error {

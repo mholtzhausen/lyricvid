@@ -30,6 +30,18 @@ type Config struct {
 	Transition         string  // xfade transition name, or "none"
 	TransitionDuration float64 // seconds
 	LyricVPosition     float64 // vertical position of focused lyric, 0.0=top 1.0=bottom
+
+	FadeInSeconds      float64  // 0 = no fade-in
+	FadeInTitle        string   // pipe-separated lines; empty = no title
+	FadeInTitleFadeOut float64  // seconds to fade out title after fade-in ends
+	FadeInFontSizes    []int    // per-line sizes; last entry used for overflow
+	FadeInFontColor    string
+
+	FadeOutSeconds      float64
+	FadeOutTitle        string
+	FadeOutTitleFadeOut float64
+	FadeOutFontSizes    []int
+	FadeOutFontColor    string
 }
 
 // Render builds and executes the FFmpeg command to produce the video.
@@ -139,7 +151,6 @@ func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 	h := cfg.Height
 	dim := 1.0 - cfg.BgDim
 
-	// Build background source segment ending with [bg]
 	bgSource, err := buildBgSource(cfg, w, h, dim)
 	if err != nil {
 		return "", err
@@ -149,41 +160,143 @@ func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 	contextSize := cfg.FontSize
 	lineHeight := int(float64(highlightSize) * 1.6)
 
-	// Build drawtext chain or passthrough
-	var drawtextSection string
-	if len(cfg.Lines) == 0 {
-		drawtextSection = "[bg]null[out]"
-	} else {
-		var drawTexts []string
-		for i, line := range cfg.Lines {
-			dt := buildDrawtext(fontPath, highlightSize, cfg.HighlightColor, "1.0",
-				"(w-text_w)/2", fmt.Sprintf("(h*%.4f)-(%d/2)", cfg.LyricVPosition, highlightSize),
-				line.Text, line.StartTime, line.EndTime)
-			drawTexts = append(drawTexts, dt)
+	var chain []string
 
-			for offset := -2; offset <= 2; offset++ {
-				if offset == 0 {
-					continue
-				}
-				ctxIdx := i + offset
-				if ctxIdx < 0 || ctxIdx >= len(cfg.Lines) {
-					continue
-				}
-				yExpr := fmt.Sprintf("(h*%.4f)-(%d/2)+(%d)", cfg.LyricVPosition, highlightSize, offset*lineHeight)
-				opacity := "0.7"
-				if offset == -2 || offset == 2 {
-					opacity = "0.4"
-				}
-				dt := buildDrawtext(fontPath, contextSize, cfg.FontColor, opacity,
-					"(w-text_w)/2", yExpr,
-					cfg.Lines[ctxIdx].Text, line.StartTime, line.EndTime)
-				drawTexts = append(drawTexts, dt)
+	// 1. Lyrics drawtexts
+	for i, line := range cfg.Lines {
+		dt := buildDrawtext(fontPath, highlightSize, cfg.HighlightColor, "1.0",
+			"(w-text_w)/2", fmt.Sprintf("(h*%.4f)-(%d/2)", cfg.LyricVPosition, highlightSize),
+			line.Text, line.StartTime, line.EndTime)
+		chain = append(chain, dt)
+
+		for offset := -2; offset <= 2; offset++ {
+			if offset == 0 {
+				continue
 			}
+			ctxIdx := i + offset
+			if ctxIdx < 0 || ctxIdx >= len(cfg.Lines) {
+				continue
+			}
+			yExpr := fmt.Sprintf("(h*%.4f)-(%d/2)+(%d)", cfg.LyricVPosition, highlightSize, offset*lineHeight)
+			opacity := "0.7"
+			if offset == -2 || offset == 2 {
+				opacity = "0.4"
+			}
+			dt := buildDrawtext(fontPath, contextSize, cfg.FontColor, opacity,
+				"(w-text_w)/2", yExpr,
+				cfg.Lines[ctxIdx].Text, line.StartTime, line.EndTime)
+			chain = append(chain, dt)
 		}
-		drawtextSection = "[bg]\n" + strings.Join(drawTexts, ",\n") + "\n[out]"
 	}
 
+	// 2. Fade-in (drawn after lyrics so titles emerge from black alongside the video)
+	if cfg.FadeInSeconds > 0 {
+		chain = append(chain, fmt.Sprintf(
+			"fade=type=in:start_time=0:duration=%.3f", cfg.FadeInSeconds))
+	}
+
+	// 3. Fade-in title (drawn on already-faded-in video)
+	if cfg.FadeInSeconds > 0 && cfg.FadeInTitle != "" {
+		enableEnd := cfg.FadeInSeconds + cfg.FadeInTitleFadeOut
+		var alphaExpr string
+		if cfg.FadeInTitleFadeOut > 0 {
+			alphaExpr = fmt.Sprintf(
+				"if(lt(t,%.3f),1,max(0,(%.3f-t)/%.3f))",
+				cfg.FadeInSeconds, enableEnd, cfg.FadeInTitleFadeOut)
+		} else {
+			alphaExpr = "1"
+		}
+		dts := buildTitleDrawtexts(fontPath, strings.Split(cfg.FadeInTitle, "|"),
+			cfg.FadeInFontSizes, cfg.FadeInFontColor, 0, enableEnd, alphaExpr)
+		chain = append(chain, dts...)
+	}
+
+	// 4. Fade-out title (drawn before fade-out so it darkens with the video)
+	if cfg.FadeOutSeconds > 0 && cfg.FadeOutTitle != "" {
+		fadeOutStart := cfg.Duration - cfg.FadeOutSeconds
+		enableStart := fadeOutStart - cfg.FadeOutTitleFadeOut
+		if enableStart < 0 {
+			enableStart = 0
+		}
+		var alphaExpr string
+		if cfg.FadeOutTitleFadeOut > 0 {
+			alphaExpr = fmt.Sprintf(
+				"if(lt(t,%.3f),max(0,(t-%.3f)/%.3f),1)",
+				fadeOutStart, enableStart, cfg.FadeOutTitleFadeOut)
+		} else {
+			alphaExpr = "1"
+		}
+		dts := buildTitleDrawtexts(fontPath, strings.Split(cfg.FadeOutTitle, "|"),
+			cfg.FadeOutFontSizes, cfg.FadeOutFontColor, enableStart, cfg.Duration, alphaExpr)
+		chain = append(chain, dts...)
+	}
+
+	// 5. Fade-out (darkens everything including the title drawn above)
+	if cfg.FadeOutSeconds > 0 {
+		start := cfg.Duration - cfg.FadeOutSeconds
+		if start < 0 {
+			start = 0
+		}
+		chain = append(chain, fmt.Sprintf(
+			"fade=type=out:start_time=%.3f:duration=%.3f", start, cfg.FadeOutSeconds))
+	}
+
+	if len(chain) == 0 {
+		chain = []string{"null"}
+	}
+
+	drawtextSection := "[bg]\n" + strings.Join(chain, ",\n") + "\n[out]"
 	return bgSource + ";\n" + drawtextSection, nil
+}
+
+// buildTitleDrawtexts produces one drawtext filter per title line, centered as a block.
+// alphaExpr is an FFmpeg expression for per-frame alpha (can be "1" for constant).
+func buildTitleDrawtexts(fontPath string, lines []string, fontSizes []int, color string,
+	enableStart, enableEnd float64, alphaExpr string) []string {
+
+	if len(lines) == 0 {
+		return nil
+	}
+
+	// Resolve per-line font sizes; last provided size is the fallback.
+	sizes := make([]int, len(lines))
+	for i := range lines {
+		switch {
+		case i < len(fontSizes):
+			sizes[i] = fontSizes[i]
+		case len(fontSizes) > 0:
+			sizes[i] = fontSizes[len(fontSizes)-1]
+		default:
+			sizes[i] = 60
+		}
+	}
+
+	// Compute line heights and total block height for vertical centering.
+	lineHeights := make([]int, len(lines))
+	totalH := 0
+	for i, sz := range sizes {
+		lineHeights[i] = int(float64(sz) * 1.4)
+		totalH += lineHeights[i]
+	}
+
+	fontSpec := ""
+	if fontPath != "" {
+		fontSpec = fmt.Sprintf("fontfile='%s':", escapeDrawtextValue(fontPath))
+	}
+
+	var result []string
+	yOffset := 0
+	for i, line := range lines {
+		yExpr := fmt.Sprintf("(h-%d)/2+%d", totalH, yOffset)
+		escapedText := escapeDrawtext(line)
+		dt := fmt.Sprintf(
+			"drawtext=%sfontsize=%d:fontcolor=%s:x=(w-text_w)/2:y=%s:text='%s':enable='between(t,%.3f,%.3f)':alpha='%s'",
+			fontSpec, sizes[i], color, yExpr, escapedText, enableStart, enableEnd, alphaExpr,
+		)
+		result = append(result, dt)
+		yOffset += lineHeights[i]
+	}
+	return result
 }
 
 func buildBgSource(cfg Config, w, h int, dim float64) (string, error) {
