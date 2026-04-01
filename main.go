@@ -31,6 +31,7 @@ var (
 	transitionDuration float64
 	lyricVPosition     float64
 	lyricFade          float64
+	lyricFadeStyle     string
 
 	// config
 	configFilePath string
@@ -52,6 +53,8 @@ var (
 	fadeOutTitleFadeOut float64
 	fadeOutFontSize     string // pipe-separated sizes
 	fadeOutFontColor    string
+
+	fontSizeReference int
 
 	// imagegen flags
 	imagegenInspirationPath string
@@ -136,6 +139,7 @@ func addFlags(cmd *cobra.Command) {
 	cmd.Flags().IntVar(&width, "width", 1920, "Video width in pixels (ignored when --quality is set)")
 	cmd.Flags().IntVar(&height, "height", 1080, "Video height in pixels (ignored when --quality is set)")
 	cmd.Flags().IntVar(&fontSize, "font-size", 38, "Base font size for lyrics")
+	cmd.Flags().IntVar(&fontSizeReference, "font-size-reference", 38, "Font size in pt at the 1920px reference width; used for auto-scaling when --font-size is not set")
 	cmd.Flags().StringVar(&fontColor, "font-color", "#FFFFFF", "Font color for context lyrics")
 	cmd.Flags().StringVar(&highlightColor, "highlight-color", "#FFD700", "Font color for active lyric line")
 	cmd.Flags().Float64Var(&bgDim, "bg-dim", 0.4, "Background dimming factor (0.0 = black, 1.0 = no dim)")
@@ -143,6 +147,7 @@ func addFlags(cmd *cobra.Command) {
 	cmd.Flags().Float64Var(&transitionDuration, "transition-duration", 3.0, "Duration of transition effect in seconds")
 	cmd.Flags().Float64Var(&lyricVPosition, "lyric-position", 0.65, "Vertical position of the focused lyric line (0.0=top, 1.0=bottom)")
 	cmd.Flags().Float64Var(&lyricFade, "lyric-fade", 0.3, "Seconds to cross-fade between lyric lines; 0 = hard cut")
+	cmd.Flags().StringVar(&lyricFadeStyle, "lyric-fade-style", "linear", "Alpha curve for lyric cross-fade: linear|smooth")
 
 	cmd.Flags().Float64Var(&fadeInSeconds, "fade-in-seconds", 0, "Seconds to fade from black at the start; 0 = no fade-in")
 	cmd.Flags().StringVar(&fadeInTitle, "fade-in-title", "", "Title text shown during fade-in; use | to separate multiple lines")
@@ -214,7 +219,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	// Auto-scale font size proportional to width (reference: 1920px → 38pt)
 	// unless the user explicitly set --font-size or a config file provided one
 	if !cmd.Flags().Changed("font-size") && gc.FontSize == 0 {
-		fontSize = int(math.Round(38.0 * float64(width) / 1920.0))
+		fontSize = int(math.Round(float64(fontSizeReference) * float64(width) / 1920.0))
 		if fontSize < 8 {
 			fontSize = 8
 		}
@@ -365,7 +370,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	p("bg-dim", fmt.Sprintf("%.2f", bgDim))
 	p("transition", transitionDesc)
 	p("lyric-position", fmt.Sprintf("%.2f", lyricVPosition))
-	p("lyric-fade", fmt.Sprintf("%.2fs", lyricFade))
+	p("lyric-fade", fmt.Sprintf("%.2fs  (%s)", lyricFade, lyricFadeStyle))
 	fmt.Println()
 
 	if fadeInSeconds > 0 {
@@ -409,6 +414,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		TransitionDuration: transitionDuration,
 		LyricVPosition:     lyricVPosition,
 		LyricFade:          lyricFade,
+		LyricFadeStyle:     lyricFadeStyle,
 
 		FadeInSeconds:      fadeInSeconds,
 		FadeInTitle:        fadeInTitle,

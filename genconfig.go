@@ -21,6 +21,7 @@ type GenerateConfig struct {
 	Width               int     `yaml:"width,omitempty"`
 	Height              int     `yaml:"height,omitempty"`
 	FontSize            int     `yaml:"font-size,omitempty"`
+	FontSizeReference   int     `yaml:"font-size-reference,omitempty"`
 	FontColor           string  `yaml:"font-color,omitempty"`
 	HighlightColor      string  `yaml:"highlight-color,omitempty"`
 	BgDim               float64 `yaml:"bg-dim,omitempty"`
@@ -28,6 +29,7 @@ type GenerateConfig struct {
 	TransitionDuration  float64 `yaml:"transition-duration,omitempty"`
 	LyricPosition       float64 `yaml:"lyric-position,omitempty"`
 	LyricFade           float64 `yaml:"lyric-fade,omitempty"`
+	LyricFadeStyle      string  `yaml:"lyric-fade-style,omitempty"`
 	FadeInSeconds       float64 `yaml:"fade-in-seconds,omitempty"`
 	FadeInTitle         string  `yaml:"fade-in-title,omitempty"`
 	FadeInTitleFadeOut  float64 `yaml:"fade-in-title-fade-out,omitempty"`
@@ -85,6 +87,9 @@ func loadGenerateConfig(paths []string) (GenerateConfig, []string, error) {
 		if tmp.FontSize != 0 {
 			acc.FontSize = tmp.FontSize
 		}
+		if tmp.FontSizeReference != 0 {
+			acc.FontSizeReference = tmp.FontSizeReference
+		}
 		if tmp.FontColor != "" {
 			acc.FontColor = tmp.FontColor
 		}
@@ -105,6 +110,9 @@ func loadGenerateConfig(paths []string) (GenerateConfig, []string, error) {
 		}
 		if tmp.LyricFade != 0 {
 			acc.LyricFade = tmp.LyricFade
+		}
+		if tmp.LyricFadeStyle != "" {
+			acc.LyricFadeStyle = tmp.LyricFadeStyle
 		}
 		if tmp.FadeInSeconds != 0 {
 			acc.FadeInSeconds = tmp.FadeInSeconds
@@ -167,6 +175,9 @@ func applyConfig(cmd *cobra.Command, gc GenerateConfig) {
 	if gc.FontSize != 0 && !cmd.Flags().Changed("font-size") {
 		fontSize = gc.FontSize
 	}
+	if gc.FontSizeReference != 0 && !cmd.Flags().Changed("font-size-reference") {
+		fontSizeReference = gc.FontSizeReference
+	}
 	if gc.FontColor != "" && !cmd.Flags().Changed("font-color") {
 		fontColor = gc.FontColor
 	}
@@ -187,6 +198,9 @@ func applyConfig(cmd *cobra.Command, gc GenerateConfig) {
 	}
 	if gc.LyricFade != 0 && !cmd.Flags().Changed("lyric-fade") {
 		lyricFade = gc.LyricFade
+	}
+	if gc.LyricFadeStyle != "" && !cmd.Flags().Changed("lyric-fade-style") {
+		lyricFadeStyle = gc.LyricFadeStyle
 	}
 	if gc.FadeInSeconds != 0 && !cmd.Flags().Changed("fade-in-seconds") {
 		fadeInSeconds = gc.FadeInSeconds
@@ -280,8 +294,12 @@ func runCreateConfig(_ *cobra.Command, args []string) error {
 	b.WriteString("\n\n# --- Typography ---\n")
 
 	wf(&b, false,
-		"Base font size for lyrics in points.\nAuto-scaled proportionally to width (reference: 38pt at 1920px) when not set.",
+		"Base font size for lyrics in points.\nAuto-scaled proportionally to width using font-size-reference when not set.",
 		"font-size", "38")
+
+	wf(&b, false,
+		"Reference font size in pt at 1920px width.\nUsed for auto-scaling when font-size is not explicitly set.",
+		"font-size-reference", "38")
 
 	wf(&b, false,
 		"Font color for context (non-active) lyric lines.\nAccepts hex (#RRGGBB) or FFmpeg named colors (white, yellow, etc.).",
@@ -316,6 +334,10 @@ func runCreateConfig(_ *cobra.Command, args []string) error {
 	wf(&b, false,
 		"Seconds to cross-fade between lyric lines. Set to 0 for hard cuts.",
 		"lyric-fade", "0.3")
+
+	wf(&b, false,
+		"Alpha curve for lyric cross-fade transitions.\nValid values: linear, smooth",
+		"lyric-fade-style", `"linear"`)
 
 	// --- Fade-In ---
 	b.WriteString("\n\n# --- Fade-In ---\n")

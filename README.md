@@ -60,6 +60,8 @@ lyricvid \
 | `--font-color` | `#FFFFFF` | Color for context lyric lines |
 | `--highlight-color` | `#FFD700` | Color for the active lyric line |
 | `--bg-dim` | `0.4` | Background dimming (0.0 = fully black, 1.0 = no dimming) |
+| `--lyric-fade` | `0.3` | Seconds to cross-fade between lyric lines; 0 = hard cut |
+| `--lyric-fade-style` | `linear` | Alpha curve for lyric cross-fade: `linear` or `smooth` |
 
 ### Example with all options
 
