@@ -298,7 +298,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("parsing lyrics: %w", err)
 		}
 		if isLRC {
-			lyrics.SetEndTimes(lines, duration)
+			lines = lyrics.SetEndTimes(lines, duration)
 			lyricsDesc = fmt.Sprintf("%s  (%d lines · LRC)", lyricsPath, len(lines))
 		} else {
 			lyrics.DistributeEvenly(lines, duration)

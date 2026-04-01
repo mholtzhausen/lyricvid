@@ -50,7 +50,9 @@ func ParseFile(path string) ([]Line, bool, error) {
 }
 
 // SetEndTimes fills in EndTime for each line based on the next line's start or total duration.
-func SetEndTimes(lines []Line, totalDuration float64) {
+// Empty-text sentinel lines (e.g. a bare LRC timestamp) act as an end marker and are removed
+// from the returned slice.
+func SetEndTimes(lines []Line, totalDuration float64) []Line {
 	for i := range lines {
 		if i < len(lines)-1 {
 			lines[i].EndTime = lines[i+1].StartTime
@@ -58,6 +60,14 @@ func SetEndTimes(lines []Line, totalDuration float64) {
 			lines[i].EndTime = totalDuration
 		}
 	}
+	// Filter out empty-text sentinels now that they've served their purpose.
+	out := lines[:0]
+	for _, l := range lines {
+		if l.Text != "" {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // DistributeEvenly assigns timestamps to plain text lines spread across the total duration.
@@ -112,10 +122,6 @@ func parseLRC(rawLines []string) ([]Line, error) {
 
 		timestamp := float64(minutes)*60.0 + float64(seconds) + fracSeconds
 		text := strings.TrimSpace(matches[4])
-
-		if text == "" {
-			continue
-		}
 
 		lines = append(lines, Line{
 			StartTime: timestamp,
