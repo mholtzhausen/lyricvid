@@ -13,15 +13,18 @@ import (
 )
 
 var (
-	lyricsPath     string
-	imagePath      string
-	outputPath     string
-	width          int
-	height         int
-	fontSize       int
-	fontColor      string
-	highlightColor string
-	bgDim          float64
+	lyricsPath         string
+	imagePath          string
+	outputPath         string
+	width              int
+	height             int
+	fontSize           int
+	fontColor          string
+	highlightColor     string
+	bgDim              float64
+	transition         string
+	transitionDuration float64
+	lyricVPosition     float64
 )
 
 func main() {
@@ -62,6 +65,9 @@ func addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&fontColor, "font-color", "#FFFFFF", "Font color for context lyrics")
 	cmd.Flags().StringVar(&highlightColor, "highlight-color", "#FFD700", "Font color for active lyric line")
 	cmd.Flags().Float64Var(&bgDim, "bg-dim", 0.4, "Background dimming factor (0.0 = black, 1.0 = no dim)")
+	cmd.Flags().StringVar(&transition, "transition", "fade", "Transition between images: fade|fadeblack|fadewhite|dissolve|wipeleft|wiperight|wipeup|wipedown|slideleft|slideright|radial|pixelize|none")
+	cmd.Flags().Float64Var(&transitionDuration, "transition-duration", 3.0, "Duration of transition effect in seconds")
+	cmd.Flags().Float64Var(&lyricVPosition, "lyric-position", 0.65, "Vertical position of the focused lyric line (0.0=top, 1.0=bottom)")
 }
 
 func runGenerate(cmd *cobra.Command, args []string) error {
@@ -178,9 +184,12 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		FontSize:       fontSize,
 		FontColor:      fontColor,
 		HighlightColor: highlightColor,
-		BgDim:          bgDim,
-		Lines:          lines,
-		Duration:       duration,
+		BgDim:              bgDim,
+		Lines:              lines,
+		Duration:           duration,
+		Transition:         transition,
+		TransitionDuration: transitionDuration,
+		LyricVPosition:     lyricVPosition,
 	}
 
 	return video.Render(cfg)

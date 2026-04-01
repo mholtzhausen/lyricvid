@@ -25,14 +25,20 @@ type Config struct {
 	FontColor      string
 	HighlightColor string
 	BgDim          float64
-	Lines          []lyrics.Line
-	Duration       float64
+	Lines              []lyrics.Line
+	Duration           float64
+	Transition         string  // xfade transition name, or "none"
+	TransitionDuration float64 // seconds
+	LyricVPosition     float64 // vertical position of focused lyric, 0.0=top 1.0=bottom
 }
 
 // Render builds and executes the FFmpeg command to produce the video.
 func Render(cfg Config) error {
 	fontPath := findFont()
-	filterComplex := buildFilterComplex(cfg, fontPath)
+	filterComplex, err := buildFilterComplex(cfg, fontPath)
+	if err != nil {
+		return err
+	}
 
 	args := []string{"-y"}
 	for _, p := range cfg.ImagePaths {
@@ -128,13 +134,16 @@ func scanFFmpegLines(data []byte, atEOF bool) (advance int, token []byte, err er
 	return 0, nil, nil
 }
 
-func buildFilterComplex(cfg Config, fontPath string) string {
+func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 	w := cfg.Width
 	h := cfg.Height
 	dim := 1.0 - cfg.BgDim
 
 	// Build background source segment ending with [bg]
-	bgSource := buildBgSource(cfg, w, h, dim)
+	bgSource, err := buildBgSource(cfg, w, h, dim)
+	if err != nil {
+		return "", err
+	}
 
 	highlightSize := int(float64(cfg.FontSize) * 1.2)
 	contextSize := cfg.FontSize
@@ -148,7 +157,7 @@ func buildFilterComplex(cfg Config, fontPath string) string {
 		var drawTexts []string
 		for i, line := range cfg.Lines {
 			dt := buildDrawtext(fontPath, highlightSize, cfg.HighlightColor, "1.0",
-				"(w-text_w)/2", fmt.Sprintf("(h/2)-(%d/2)", highlightSize),
+				"(w-text_w)/2", fmt.Sprintf("(h*%.4f)-(%d/2)", cfg.LyricVPosition, highlightSize),
 				line.Text, line.StartTime, line.EndTime)
 			drawTexts = append(drawTexts, dt)
 
@@ -160,7 +169,7 @@ func buildFilterComplex(cfg Config, fontPath string) string {
 				if ctxIdx < 0 || ctxIdx >= len(cfg.Lines) {
 					continue
 				}
-				yExpr := fmt.Sprintf("(h/2)-(%d/2)+(%d)", highlightSize, offset*lineHeight)
+				yExpr := fmt.Sprintf("(h*%.4f)-(%d/2)+(%d)", cfg.LyricVPosition, highlightSize, offset*lineHeight)
 				opacity := "0.7"
 				if offset == -2 || offset == 2 {
 					opacity = "0.4"
@@ -174,16 +183,16 @@ func buildFilterComplex(cfg Config, fontPath string) string {
 		drawtextSection = "[bg]\n" + strings.Join(drawTexts, ",\n") + "\n[out]"
 	}
 
-	return bgSource + ";\n" + drawtextSection
+	return bgSource + ";\n" + drawtextSection, nil
 }
 
-func buildBgSource(cfg Config, w, h int, dim float64) string {
+func buildBgSource(cfg Config, w, h int, dim float64) (string, error) {
 	switch len(cfg.ImagePaths) {
 	case 0:
 		return fmt.Sprintf(
 			"color=c=black:s=%dx%d:r=25,format=yuv420p,colorchannelmixer=rr=%.2f:gg=%.2f:bb=%.2f[bg]",
 			w, h, dim, dim, dim,
-		)
+		), nil
 	case 1:
 		return fmt.Sprintf(
 			"[0:v]scale=%d:%d:force_original_aspect_ratio=decrease,"+
@@ -191,7 +200,7 @@ func buildBgSource(cfg Config, w, h int, dim float64) string {
 				"format=yuv420p,"+
 				"colorchannelmixer=rr=%.2f:gg=%.2f:bb=%.2f[bg]",
 			w, h, w, h, dim, dim, dim,
-		)
+		), nil
 	default:
 		n := len(cfg.ImagePaths)
 		perImage := cfg.Duration / float64(n)
@@ -208,12 +217,38 @@ func buildBgSource(cfg Config, w, h int, dim float64) string {
 				i, w, h, w, h, dim, dim, dim, perImage, i,
 			))
 		}
-		concatInputs := ""
-		for i := range cfg.ImagePaths {
-			concatInputs += fmt.Sprintf("[slid%d]", i)
+
+		t := cfg.Transition
+		if t == "" || t == "none" {
+			concatInputs := ""
+			for i := range cfg.ImagePaths {
+				concatInputs += fmt.Sprintf("[slid%d]", i)
+			}
+			parts = append(parts, fmt.Sprintf("%sconcat=n=%d:v=1:a=0[bg]", concatInputs, n))
+			return strings.Join(parts, ";\n"), nil
 		}
-		parts = append(parts, fmt.Sprintf("%sconcat=n=%d:v=1:a=0[bg]", concatInputs, n))
-		return strings.Join(parts, ";\n")
+
+		td := cfg.TransitionDuration
+		if td >= perImage {
+			return "", fmt.Errorf("transition-duration (%.1fs) must be less than per-image duration (%.1fs)", td, perImage)
+		}
+
+		// Chain xfade filters: each offset is (i+1)*(perImage-td) relative to the
+		// accumulated output of the previous xfade.
+		prev := "[slid0]"
+		for i := 0; i < n-1; i++ {
+			outLabel := fmt.Sprintf("[xf%d]", i)
+			if i == n-2 {
+				outLabel = "[bg]"
+			}
+			offset := float64(i+1) * (perImage - td)
+			parts = append(parts, fmt.Sprintf(
+				"%s[slid%d]xfade=transition=%s:duration=%.6f:offset=%.6f%s",
+				prev, i+1, t, td, offset, outLabel,
+			))
+			prev = outLabel
+		}
+		return strings.Join(parts, ";\n"), nil
 	}
 }
 
