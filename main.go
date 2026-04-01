@@ -63,6 +63,16 @@ var (
 	imagegenQuality         string
 	imagegenStyle           string
 	imagegenAspectRatio     string
+
+	// drift flags
+	driftTypes       string
+	driftMax         int
+	driftMin         int
+	driftDurationPct float64
+	driftEasing      string
+
+	// hardware acceleration
+	enableCUDA bool
 )
 
 func main() {
@@ -160,6 +170,14 @@ func addFlags(cmd *cobra.Command) {
 	cmd.Flags().Float64Var(&fadeOutTitleFadeOut, "fade-out-title-fade-out", 1, "Seconds to fade in the title before the fade-out period starts")
 	cmd.Flags().StringVar(&fadeOutFontSize, "fade-out-font-size", "60", "Font size(s) for fade-out title; use | to set per-line sizes (last size is the default for remaining lines)")
 	cmd.Flags().StringVar(&fadeOutFontColor, "fade-out-font-color", "", "Font color(s) for fade-out title; use | for per-line colors (defaults to --font-color)")
+
+	cmd.Flags().StringVar(&driftTypes, "drift", "", "Background drift animation: comma-separated list of left,right,up,down,zoom-in,zoom-out,random (empty=disabled)")
+	cmd.Flags().IntVar(&driftMax, "drift-max", 60, "Maximum drift in pixels")
+	cmd.Flags().IntVar(&driftMin, "drift-min", 10, "Minimum drift in pixels")
+	cmd.Flags().Float64Var(&driftDurationPct, "drift-duration-percentage", 90, "Percentage of image display time used for the drift animation (1–100); image holds at final position afterward")
+	cmd.Flags().StringVar(&driftEasing, "drift-easing", "quad", "Easing curve for drift animation: linear, quad (default), cubic, smooth")
+
+	cmd.Flags().BoolVar(&enableCUDA, "enable-cuda", true, "Use CUDA hardware acceleration (h264_nvenc encoder); probes availability on each run, falls back to libx264 if unavailable")
 }
 
 func runGenerate(cmd *cobra.Command, args []string) error {
@@ -282,6 +300,46 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("bg-dim must be between 0.0 and 1.0")
 	}
 
+	// Parse and validate drift types
+	var resolvedDriftTypes []string
+	if driftTypes != "" {
+		validDrift := map[string]bool{
+			"random": true, "left": true, "right": true,
+			"up": true, "down": true, "zoom-in": true, "zoom-out": true,
+		}
+		for _, raw := range strings.Split(driftTypes, ",") {
+			t := strings.TrimSpace(raw)
+			if t == "" {
+				continue
+			}
+			if !validDrift[t] {
+				return fmt.Errorf("unknown drift type %q; valid values: random, left, right, up, down, zoom-in, zoom-out", t)
+			}
+			resolvedDriftTypes = append(resolvedDriftTypes, t)
+		}
+	}
+	if driftMin < 0 {
+		return fmt.Errorf("drift-min must be >= 0")
+	}
+	if driftMax < driftMin {
+		return fmt.Errorf("drift-max (%d) must be >= drift-min (%d)", driftMax, driftMin)
+	}
+	if len(resolvedDriftTypes) > 0 {
+		if driftDurationPct <= 0 || driftDurationPct > 100 {
+			return fmt.Errorf("drift-duration-percentage must be between 1 and 100")
+		}
+		validEasing := map[string]bool{"linear": true, "quad": true, "cubic": true, "smooth": true}
+		if !validEasing[driftEasing] {
+			return fmt.Errorf("unknown drift-easing %q; valid values: linear, quad, cubic, smooth", driftEasing)
+		}
+	}
+
+	// Probe CUDA availability
+	cudaAvailable := false
+	if enableCUDA {
+		cudaAvailable = audio.CheckCUDA()
+	}
+
 	// Get audio duration
 	duration, err := audio.GetDuration(audioPath)
 	if err != nil {
@@ -371,6 +429,20 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	p("transition", transitionDesc)
 	p("lyric-position", fmt.Sprintf("%.2f", lyricVPosition))
 	p("lyric-fade", fmt.Sprintf("%.2fs  (%s)", lyricFade, lyricFadeStyle))
+	if len(resolvedDriftTypes) > 0 {
+		p("drift", fmt.Sprintf("%s  (%d\u2013%dpx  %.0f%%  %s)", strings.Join(resolvedDriftTypes, ","), driftMin, driftMax, driftDurationPct, driftEasing))
+	} else {
+		p("drift", "disabled")
+	}
+	if enableCUDA {
+		if cudaAvailable {
+			p("cuda", "enabled  (h264_nvenc)")
+		} else {
+			p("cuda", "not available  (using libx264)")
+		}
+	} else {
+		p("cuda", "disabled  (libx264)")
+	}
 	fmt.Println()
 
 	if fadeInSeconds > 0 {
@@ -427,6 +499,14 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		FadeOutTitleFadeOut: fadeOutTitleFadeOut,
 		FadeOutFontSizes:    parsePipeSizes(fadeOutFontSize, 60),
 		FadeOutFontColors:   parsePipeColors(fadeOutFontColor),
+
+		DriftTypes:       resolvedDriftTypes,
+		DriftMin:         driftMin,
+		DriftMax:         driftMax,
+		DriftDurationPct: driftDurationPct,
+		DriftEasing:      driftEasing,
+
+		EnableCUDA: cudaAvailable,
 	}
 
 	return video.Render(cfg)

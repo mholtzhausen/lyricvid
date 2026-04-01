@@ -40,6 +40,12 @@ type GenerateConfig struct {
 	FadeOutTitleFadeOut float64 `yaml:"fade-out-title-fade-out,omitempty"`
 	FadeOutFontSize     string  `yaml:"fade-out-font-size,omitempty"`
 	FadeOutFontColor    string  `yaml:"fade-out-font-color,omitempty"`
+	Drift               string  `yaml:"drift,omitempty"`
+	DriftMax            int     `yaml:"drift-max,omitempty"`
+	DriftMin            int     `yaml:"drift-min,omitempty"`
+	DriftDurationPct    float64 `yaml:"drift-duration-percentage,omitempty"`
+	DriftEasing         string  `yaml:"drift-easing,omitempty"`
+	EnableCUDA          string  `yaml:"enable-cuda,omitempty"` // "true" or "false"; empty = not configured
 }
 
 // loadGenerateConfig loads and merges one or more YAML config files in order.
@@ -144,6 +150,24 @@ func loadGenerateConfig(paths []string) (GenerateConfig, []string, error) {
 		if tmp.FadeOutFontColor != "" {
 			acc.FadeOutFontColor = tmp.FadeOutFontColor
 		}
+		if tmp.Drift != "" {
+			acc.Drift = tmp.Drift
+		}
+		if tmp.DriftMax != 0 {
+			acc.DriftMax = tmp.DriftMax
+		}
+		if tmp.DriftMin != 0 {
+			acc.DriftMin = tmp.DriftMin
+		}
+		if tmp.DriftDurationPct != 0 {
+			acc.DriftDurationPct = tmp.DriftDurationPct
+		}
+		if tmp.DriftEasing != "" {
+			acc.DriftEasing = tmp.DriftEasing
+		}
+		if tmp.EnableCUDA != "" {
+			acc.EnableCUDA = tmp.EnableCUDA
+		}
 	}
 	return acc, loaded, nil
 }
@@ -231,6 +255,24 @@ func applyConfig(cmd *cobra.Command, gc GenerateConfig) {
 	}
 	if gc.FadeOutFontColor != "" && !cmd.Flags().Changed("fade-out-font-color") {
 		fadeOutFontColor = gc.FadeOutFontColor
+	}
+	if gc.Drift != "" && !cmd.Flags().Changed("drift") {
+		driftTypes = gc.Drift
+	}
+	if gc.DriftMax != 0 && !cmd.Flags().Changed("drift-max") {
+		driftMax = gc.DriftMax
+	}
+	if gc.DriftMin != 0 && !cmd.Flags().Changed("drift-min") {
+		driftMin = gc.DriftMin
+	}
+	if gc.DriftDurationPct != 0 && !cmd.Flags().Changed("drift-duration-percentage") {
+		driftDurationPct = gc.DriftDurationPct
+	}
+	if gc.DriftEasing != "" && !cmd.Flags().Changed("drift-easing") {
+		driftEasing = gc.DriftEasing
+	}
+	if gc.EnableCUDA != "" && !cmd.Flags().Changed("enable-cuda") {
+		enableCUDA = gc.EnableCUDA == "true"
 	}
 }
 
@@ -384,6 +426,36 @@ func runCreateConfig(_ *cobra.Command, args []string) error {
 	wf(&b, true,
 		"Font color(s) for the fade-out title. Defaults to font-color when not set.\nUse | to set different colors per line. The last value is used for any remaining lines.\nAccepts hex (#RRGGBB) or FFmpeg named colors.",
 		"fade-out-font-color", `""`)
+
+	// --- Drift ---
+	b.WriteString("\n\n# --- Drift ---\n")
+
+	wf(&b, true,
+		"Background pan/zoom animation applied to each image.\nComma-separated list of drift types; one is chosen randomly per image.\nValid values: random, left, right, up, down, zoom-in, zoom-out\n  random           — pick from all types\n  left/right/up/down — slow pan in that direction\n  zoom-in/zoom-out   — slow zoom animation\nLeave empty to disable.",
+		"drift", `""`)
+
+	wf(&b, false,
+		"Maximum drift distance in pixels (applies to both pan offset and zoom margin).",
+		"drift-max", "60")
+
+	wf(&b, false,
+		"Minimum drift distance in pixels.",
+		"drift-min", "10")
+
+	wf(&b, false,
+		"Percentage of each image\u2019s display time used for the drift animation (1\u2013100).\nThe image holds at the final drift position for the remainder of its display time.",
+		"drift-duration-percentage", "90")
+
+	wf(&b, false,
+		"Easing curve applied to the drift motion.\nValid values: linear, quad (default), cubic, smooth\n  linear — constant speed\n  quad   — ease-out quadratic (decelerates, natural camera feel)\n  cubic  — stronger deceleration\n  smooth — ease-in-out (starts and ends slowly)",
+		"drift-easing", `"quad"`)
+
+	// --- Hardware Acceleration ---
+	b.WriteString("\n\n# --- Hardware Acceleration ---\n")
+
+	wf(&b, false,
+		"Enable CUDA hardware acceleration for encoding (h264_nvenc).\nWhen true, CUDA availability is probed on each run; falls back to libx264 if not found.\nSet to false to always use CPU encoding (libx264).\nValid values: true, false",
+		"enable-cuda", `"true"`)
 
 	b.WriteString("\n")
 

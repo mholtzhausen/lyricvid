@@ -47,3 +47,14 @@ func CheckFFmpeg() error {
 	}
 	return nil
 }
+
+// CheckCUDA probes FFmpeg for CUDA hardware acceleration support.
+// Returns true if CUDA is listed as an available hwaccel method.
+func CheckCUDA() bool {
+	cmd := exec.Command("ffmpeg", "-hwaccels")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), "cuda")
+}

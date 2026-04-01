@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"os/exec"
 	"regexp"
@@ -44,6 +45,14 @@ type Config struct {
 	FadeOutTitleFadeOut float64
 	FadeOutFontSizes    []int
 	FadeOutFontColors   []string // per-line colors; last entry used for overflow
+
+	DriftTypes       []string // drift types to pick from (may include "random"); empty = disabled
+	DriftMax         int      // maximum drift in pixels
+	DriftMin         int      // minimum drift in pixels
+	DriftDurationPct float64  // percentage of image duration to animate (0–100)
+	DriftEasing      string   // easing curve: linear, quad (default), cubic, smooth
+
+	EnableCUDA bool // use h264_nvenc encoder when true
 }
 
 // Render builds and executes the FFmpeg command to produce the video.
@@ -63,7 +72,13 @@ func Render(cfg Config) error {
 		"-filter_complex", filterComplex,
 		"-map", "[out]",
 		"-map", fmt.Sprintf("%d:a", len(cfg.ImagePaths)),
-		"-c:v", "libx264", "-preset", "medium", "-crf", "23",
+	)
+	if cfg.EnableCUDA {
+		args = append(args, "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23", "-b:v", "0")
+	} else {
+		args = append(args, "-c:v", "libx264", "-preset", "medium", "-crf", "23")
+	}
+	args = append(args,
 		"-c:a", "aac", "-b:a", "192k",
 		"-shortest",
 		cfg.OutputPath,
@@ -322,12 +337,20 @@ func buildBgSource(cfg Config, w, h int, dim float64) (string, error) {
 			w, h, dim, dim, dim,
 		), nil
 	case 1:
+		if len(cfg.DriftTypes) == 0 {
+			return fmt.Sprintf(
+				"[0:v]scale=%d:%d:force_original_aspect_ratio=decrease,"+
+					"pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black,"+
+					"format=yuv420p,"+
+					"colorchannelmixer=rr=%.2f:gg=%.2f:bb=%.2f[bg]",
+				w, h, w, h, dim, dim, dim,
+			), nil
+		}
+		dp := cfg.DriftMin + rand.Intn(cfg.DriftMax-cfg.DriftMin+1)
 		return fmt.Sprintf(
-			"[0:v]scale=%d:%d:force_original_aspect_ratio=decrease,"+
-				"pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black,"+
-				"format=yuv420p,"+
-				"colorchannelmixer=rr=%.2f:gg=%.2f:bb=%.2f[bg]",
-			w, h, w, h, dim, dim, dim,
+			"[0:v]%s,format=yuv420p,colorchannelmixer=rr=%.2f:gg=%.2f:bb=%.2f[bg]",
+			buildDriftChain(pickDriftType(cfg.DriftTypes), w, h, dp, cfg.Duration, cfg.DriftDurationPct, cfg.DriftEasing),
+			dim, dim, dim,
 		), nil
 	default:
 		n := len(cfg.ImagePaths)
@@ -343,15 +366,25 @@ func buildBgSource(cfg Config, w, h int, dim float64) (string, error) {
 
 		var parts []string
 		for i := range cfg.ImagePaths {
+			var scalePad string
+			if len(cfg.DriftTypes) == 0 {
+				scalePad = fmt.Sprintf(
+					"scale=%d:%d:force_original_aspect_ratio=decrease,"+
+						"pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black",
+					w, h, w, h,
+				)
+			} else {
+				dp := cfg.DriftMin + rand.Intn(cfg.DriftMax-cfg.DriftMin+1)
+				scalePad = buildDriftChain(pickDriftType(cfg.DriftTypes), w, h, dp, perImage, cfg.DriftDurationPct, cfg.DriftEasing)
+			}
 			parts = append(parts, fmt.Sprintf(
-				"[%d:v]scale=%d:%d:force_original_aspect_ratio=decrease,"+
-					"pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black,"+
+				"[%d:v]%s,"+
 					"format=yuv420p,"+
 					"setsar=1,"+
 					"colorchannelmixer=rr=%.2f:gg=%.2f:bb=%.2f,"+
 					"trim=duration=%.6f,"+
 					"setpts=PTS-STARTPTS[slid%d]",
-				i, w, h, w, h, dim, dim, dim, perImage, i,
+				i, scalePad, dim, dim, dim, perImage, i,
 			))
 		}
 
@@ -384,6 +417,137 @@ func buildBgSource(cfg Config, w, h int, dim float64) (string, error) {
 			prev = outLabel
 		}
 		return strings.Join(parts, ";\n"), nil
+	}
+}
+
+// driftConcreteTypes lists all valid non-random drift animation types in a fixed order.
+var driftConcreteTypes = []string{"left", "right", "up", "down", "zoom-in", "zoom-out"}
+
+// pickDriftType selects one drift type randomly from the provided list.
+// "random" is expanded to all concrete types. Returns "" if the list is empty.
+func pickDriftType(types []string) string {
+	if len(types) == 0 {
+		return ""
+	}
+	seen := make(map[string]bool)
+	for _, t := range types {
+		if t == "random" {
+			for _, ct := range driftConcreteTypes {
+				seen[ct] = true
+			}
+		} else {
+			seen[t] = true
+		}
+	}
+	pool := make([]string, 0, len(seen))
+	for _, ct := range driftConcreteTypes {
+		if seen[ct] {
+			pool = append(pool, ct)
+		}
+	}
+	if len(pool) == 0 {
+		return ""
+	}
+	return pool[rand.Intn(len(pool))]
+}
+
+// buildEasingExpr returns an FFmpeg expression that applies the chosen easing curve
+// to the normalised progress variable p (already clamped to [0,1]).
+// Curves:
+//
+//	linear : constant speed
+//	quad   : ease-out quadratic  p*(2-p)           — decelerates to rest (default)
+//	cubic  : ease-out cubic       p*(3+p*(p-3))     — stronger deceleration
+//	smooth : ease-in-out (smoothstep) p²*(3-2p)     — gradual start and end
+func buildEasingExpr(easing, p string) string {
+	switch easing {
+	case "linear":
+		return p
+	case "cubic":
+		// ease-out-cubic: 1-(1-p)^3 = p*(3+p*(p-3))
+		return fmt.Sprintf("(%[1]s)*(3+(%[1]s)*((%[1]s)-3))", p)
+	case "smooth":
+		// smoothstep: p²*(3-2p)
+		return fmt.Sprintf("(%[1]s)*(%[1]s)*(3-2*(%[1]s))", p)
+	default: // "quad"
+		// ease-out-quad: p*(2-p)
+		return fmt.Sprintf("(%[1]s)*(2-(%[1]s))", p)
+	}
+}
+
+// buildDriftChain returns the FFmpeg filter fragment (scale+crop[+scale]) that
+// animates the background image with the given drift type.
+// dp is the drift distance in pixels (pan offset or zoom margin).
+// driftDurPct controls what percentage of dur is used for the animation;
+// after that the frame holds at the final position.
+func buildDriftChain(driftType string, w, h, dp int, dur, driftDurPct float64, easing string) string {
+	driftDur := dur * driftDurPct / 100.0
+	if driftDur <= 0 {
+		driftDur = dur
+	}
+	// min(1,t/T) rewritten without commas (FFmpeg filtergraph splits on ','):
+	// min(1,r) == (1 + r - abs(1 - r)) / 2  where r = t/T
+	p := fmt.Sprintf("((1+t/%.3f-abs(1-t/%.3f))/2)", driftDur, driftDur)
+	e := buildEasingExpr(easing, p)
+	forward := fmt.Sprintf("%d*(%s)", dp, e)
+	reverse := fmt.Sprintf("%d*(1-(%s))", dp, e)
+
+	switch driftType {
+	case "left":
+		// pan left: x 0→dp (content drifts left)
+		return fmt.Sprintf(
+			"scale=%d:%d:force_original_aspect_ratio=increase,"+
+				"crop=%d:%d:%s:(ih-%d)/2",
+			w+dp, h+dp, w, h, forward, h,
+		)
+	case "right":
+		// pan right: x dp→0 (content drifts right)
+		return fmt.Sprintf(
+			"scale=%d:%d:force_original_aspect_ratio=increase,"+
+				"crop=%d:%d:%s:(ih-%d)/2",
+			w+dp, h+dp, w, h, reverse, h,
+		)
+	case "up":
+		// pan up: y 0→dp (content drifts up)
+		return fmt.Sprintf(
+			"scale=%d:%d:force_original_aspect_ratio=increase,"+
+				"crop=%d:%d:(iw-%d)/2:%s",
+			w+dp, h+dp, w, h, w, forward,
+		)
+	case "down":
+		// pan down: y dp→0 (content drifts down)
+		return fmt.Sprintf(
+			"scale=%d:%d:force_original_aspect_ratio=increase,"+
+				"crop=%d:%d:(iw-%d)/2:%s",
+			w+dp, h+dp, w, h, w, reverse,
+		)
+	case "zoom-in":
+		// zoom in: crop shrinks W+2dp→W (image enlarges), then output scaled to W:H
+		return fmt.Sprintf(
+			"scale=%d:%d:force_original_aspect_ratio=increase,"+
+				"crop=%d+2*%d*(1-(%s)):%d+2*%d*(1-(%s)):(iw-ow)/2:(ih-oh)/2,"+
+				"scale=%d:%d",
+			w+dp*2, h+dp*2,
+			w, dp, e, h, dp, e,
+			w, h,
+		)
+	case "zoom-out":
+		// zoom out: crop grows W→W+2dp (image shrinks), then output scaled to W:H
+		return fmt.Sprintf(
+			"scale=%d:%d:force_original_aspect_ratio=increase,"+
+				"crop=%d+2*%d*(%s):%d+2*%d*(%s):(iw-ow)/2:(ih-oh)/2,"+
+				"scale=%d:%d",
+			w+dp*2, h+dp*2,
+			w, dp, e, h, dp, e,
+			w, h,
+		)
+	default:
+		// Fallback: scale+pad (no drift)
+		return fmt.Sprintf(
+			"scale=%d:%d:force_original_aspect_ratio=decrease,"+
+				"pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black",
+			w, h, w, h,
+		)
 	}
 }
 
