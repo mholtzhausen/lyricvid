@@ -17,7 +17,7 @@ import (
 // Config holds all parameters for video generation.
 type Config struct {
 	AudioPath      string
-	ImagePath      string
+	ImagePaths     []string // empty = black bg, 1 = single image, N = slideshow
 	OutputPath     string
 	Width          int
 	Height         int
@@ -34,17 +34,20 @@ func Render(cfg Config) error {
 	fontPath := findFont()
 	filterComplex := buildFilterComplex(cfg, fontPath)
 
-	args := []string{
-		"-y",
-		"-loop", "1", "-i", cfg.ImagePath,
+	args := []string{"-y"}
+	for _, p := range cfg.ImagePaths {
+		args = append(args, "-loop", "1", "-i", p)
+	}
+	args = append(args,
 		"-i", cfg.AudioPath,
 		"-filter_complex", filterComplex,
-		"-map", "[out]", "-map", "1:a",
+		"-map", "[out]",
+		"-map", fmt.Sprintf("%d:a", len(cfg.ImagePaths)),
 		"-c:v", "libx264", "-preset", "medium", "-crf", "23",
 		"-c:a", "aac", "-b:a", "192k",
 		"-shortest",
 		cfg.OutputPath,
-	}
+	)
 
 	cmd := exec.Command("ffmpeg", args...)
 
@@ -130,56 +133,88 @@ func buildFilterComplex(cfg Config, fontPath string) string {
 	h := cfg.Height
 	dim := 1.0 - cfg.BgDim
 
-	// Base video chain: scale, pad, format, dim
-	filter := fmt.Sprintf(
-		"[0:v]scale=%d:%d:force_original_aspect_ratio=decrease,"+
-			"pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black,"+
-			"format=yuv420p,"+
-			"colorchannelmixer=rr=%.2f:gg=%.2f:bb=%.2f[bg];[bg]",
-		w, h, w, h, dim, dim, dim,
-	)
+	// Build background source segment ending with [bg]
+	bgSource := buildBgSource(cfg, w, h, dim)
 
 	highlightSize := int(float64(cfg.FontSize) * 1.2)
 	contextSize := cfg.FontSize
 	lineHeight := int(float64(highlightSize) * 1.6)
 
-	// Build drawtext filters for each lyric line with context
-	var drawTexts []string
-
-	for i, line := range cfg.Lines {
-		// Active/highlight line (centered)
-		dt := buildDrawtext(fontPath, highlightSize, cfg.HighlightColor, "1.0",
-			"(w-text_w)/2", fmt.Sprintf("(h/2)-(%d/2)", highlightSize),
-			line.Text, line.StartTime, line.EndTime)
-		drawTexts = append(drawTexts, dt)
-
-		// Context lines: up to 2 before and 2 after
-		for offset := -2; offset <= 2; offset++ {
-			if offset == 0 {
-				continue
-			}
-			ctxIdx := i + offset
-			if ctxIdx < 0 || ctxIdx >= len(cfg.Lines) {
-				continue
-			}
-
-			yExpr := fmt.Sprintf("(h/2)-(%d/2)+(%d)", highlightSize, offset*lineHeight)
-			opacity := "0.7"
-			if offset == -2 || offset == 2 {
-				opacity = "0.4"
-			}
-
-			dt := buildDrawtext(fontPath, contextSize, cfg.FontColor, opacity,
-				"(w-text_w)/2", yExpr,
-				cfg.Lines[ctxIdx].Text, line.StartTime, line.EndTime)
+	// Build drawtext chain or passthrough
+	var drawtextSection string
+	if len(cfg.Lines) == 0 {
+		drawtextSection = "[bg]null[out]"
+	} else {
+		var drawTexts []string
+		for i, line := range cfg.Lines {
+			dt := buildDrawtext(fontPath, highlightSize, cfg.HighlightColor, "1.0",
+				"(w-text_w)/2", fmt.Sprintf("(h/2)-(%d/2)", highlightSize),
+				line.Text, line.StartTime, line.EndTime)
 			drawTexts = append(drawTexts, dt)
+
+			for offset := -2; offset <= 2; offset++ {
+				if offset == 0 {
+					continue
+				}
+				ctxIdx := i + offset
+				if ctxIdx < 0 || ctxIdx >= len(cfg.Lines) {
+					continue
+				}
+				yExpr := fmt.Sprintf("(h/2)-(%d/2)+(%d)", highlightSize, offset*lineHeight)
+				opacity := "0.7"
+				if offset == -2 || offset == 2 {
+					opacity = "0.4"
+				}
+				dt := buildDrawtext(fontPath, contextSize, cfg.FontColor, opacity,
+					"(w-text_w)/2", yExpr,
+					cfg.Lines[ctxIdx].Text, line.StartTime, line.EndTime)
+				drawTexts = append(drawTexts, dt)
+			}
 		}
+		drawtextSection = "[bg]\n" + strings.Join(drawTexts, ",\n") + "\n[out]"
 	}
 
-	filter += "\n" + strings.Join(drawTexts, ",\n")
-	filter += "\n[out]"
+	return bgSource + ";\n" + drawtextSection
+}
 
-	return filter
+func buildBgSource(cfg Config, w, h int, dim float64) string {
+	switch len(cfg.ImagePaths) {
+	case 0:
+		return fmt.Sprintf(
+			"color=c=black:s=%dx%d:r=25,format=yuv420p,colorchannelmixer=rr=%.2f:gg=%.2f:bb=%.2f[bg]",
+			w, h, dim, dim, dim,
+		)
+	case 1:
+		return fmt.Sprintf(
+			"[0:v]scale=%d:%d:force_original_aspect_ratio=decrease,"+
+				"pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black,"+
+				"format=yuv420p,"+
+				"colorchannelmixer=rr=%.2f:gg=%.2f:bb=%.2f[bg]",
+			w, h, w, h, dim, dim, dim,
+		)
+	default:
+		n := len(cfg.ImagePaths)
+		perImage := cfg.Duration / float64(n)
+		var parts []string
+		for i := range cfg.ImagePaths {
+			parts = append(parts, fmt.Sprintf(
+				"[%d:v]scale=%d:%d:force_original_aspect_ratio=decrease,"+
+					"pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black,"+
+					"format=yuv420p,"+
+					"setsar=1,"+
+					"colorchannelmixer=rr=%.2f:gg=%.2f:bb=%.2f,"+
+					"trim=duration=%.6f,"+
+					"setpts=PTS-STARTPTS[slid%d]",
+				i, w, h, w, h, dim, dim, dim, perImage, i,
+			))
+		}
+		concatInputs := ""
+		for i := range cfg.ImagePaths {
+			concatInputs += fmt.Sprintf("[slid%d]", i)
+		}
+		parts = append(parts, fmt.Sprintf("%sconcat=n=%d:v=1:a=0[bg]", concatInputs, n))
+		return strings.Join(parts, ";\n")
+	}
 }
 
 func buildDrawtext(fontPath string, fontSize int, color, opacity, x, y, text string, start, end float64) string {
