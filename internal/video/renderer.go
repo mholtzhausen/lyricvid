@@ -30,6 +30,7 @@ type Config struct {
 	Transition         string  // xfade transition name, or "none"
 	TransitionDuration float64 // seconds
 	LyricVPosition     float64 // vertical position of focused lyric, 0.0=top 1.0=bottom
+	LyricFade          float64 // seconds to cross-fade between lyric lines; 0 = hard cut
 
 	FadeInSeconds      float64  // 0 = no fade-in
 	FadeInTitle        string   // pipe-separated lines; empty = no title
@@ -166,7 +167,7 @@ func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 	for i, line := range cfg.Lines {
 		dt := buildDrawtext(fontPath, highlightSize, cfg.HighlightColor, "1.0",
 			"(w-text_w)/2", fmt.Sprintf("(h*%.4f)-(%d/2)", cfg.LyricVPosition, highlightSize),
-			line.Text, line.StartTime, line.EndTime)
+			line.Text, line.StartTime, line.EndTime, cfg.LyricFade)
 		chain = append(chain, dt)
 
 		for offset := -2; offset <= 2; offset++ {
@@ -184,7 +185,7 @@ func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 			}
 			dt := buildDrawtext(fontPath, contextSize, cfg.FontColor, opacity,
 				"(w-text_w)/2", yExpr,
-				cfg.Lines[ctxIdx].Text, line.StartTime, line.EndTime)
+				cfg.Lines[ctxIdx].Text, line.StartTime, line.EndTime, cfg.LyricFade)
 			chain = append(chain, dt)
 		}
 	}
@@ -372,7 +373,7 @@ func buildBgSource(cfg Config, w, h int, dim float64) (string, error) {
 	}
 }
 
-func buildDrawtext(fontPath string, fontSize int, color, opacity, x, y, text string, start, end float64) string {
+func buildDrawtext(fontPath string, fontSize int, color, opacity, x, y, text string, start, end, lyricFade float64) string {
 	escapedText := escapeDrawtext(text)
 
 	fontSpec := ""
@@ -384,6 +385,29 @@ func buildDrawtext(fontPath string, fontSize int, color, opacity, x, y, text str
 	colorSpec := color
 	if opacity != "1.0" && opacity != "1" {
 		colorSpec = fmt.Sprintf("%s@%s", color, opacity)
+	}
+
+	if lyricFade > 0 {
+		// Clamp fade to half the line duration so both ramps fit
+		lineDur := end - start
+		fade := lyricFade
+		if lineDur < 2*fade {
+			fade = lineDur / 2
+		}
+		enableStart := start - fade
+		if enableStart < 0 {
+			enableStart = 0
+		}
+		// Alpha ramps: fade-in during [enableStart, start], hold, fade-out during [end-fade, end]
+		fadeOutStart := end - fade
+		alphaExpr := fmt.Sprintf(
+			"if(lt(t,%.3f),(t-%.3f)/%.3f,if(gt(t,%.3f),(%.3f-t)/%.3f,1))",
+			start, enableStart, fade, fadeOutStart, end, fade,
+		)
+		return fmt.Sprintf(
+			"drawtext=%sfontsize=%d:fontcolor=%s:x=%s:y=%s:text='%s':enable='between(t,%.3f,%.3f)':alpha='%s'",
+			fontSpec, fontSize, colorSpec, x, y, escapedText, enableStart, end, alphaExpr,
+		)
 	}
 
 	return fmt.Sprintf(

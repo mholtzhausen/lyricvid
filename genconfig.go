@@ -27,6 +27,7 @@ type GenerateConfig struct {
 	Transition          string  `yaml:"transition,omitempty"`
 	TransitionDuration  float64 `yaml:"transition-duration,omitempty"`
 	LyricPosition       float64 `yaml:"lyric-position,omitempty"`
+	LyricFade           float64 `yaml:"lyric-fade,omitempty"`
 	FadeInSeconds       float64 `yaml:"fade-in-seconds,omitempty"`
 	FadeInTitle         string  `yaml:"fade-in-title,omitempty"`
 	FadeInTitleFadeOut  float64 `yaml:"fade-in-title-fade-out,omitempty"`
@@ -101,6 +102,9 @@ func loadGenerateConfig(paths []string) (GenerateConfig, []string, error) {
 		}
 		if tmp.LyricPosition != 0 {
 			acc.LyricPosition = tmp.LyricPosition
+		}
+		if tmp.LyricFade != 0 {
+			acc.LyricFade = tmp.LyricFade
 		}
 		if tmp.FadeInSeconds != 0 {
 			acc.FadeInSeconds = tmp.FadeInSeconds
@@ -180,6 +184,9 @@ func applyConfig(cmd *cobra.Command, gc GenerateConfig) {
 	}
 	if gc.LyricPosition != 0 && !cmd.Flags().Changed("lyric-position") {
 		lyricVPosition = gc.LyricPosition
+	}
+	if gc.LyricFade != 0 && !cmd.Flags().Changed("lyric-fade") {
+		lyricFade = gc.LyricFade
 	}
 	if gc.FadeInSeconds != 0 && !cmd.Flags().Changed("fade-in-seconds") {
 		fadeInSeconds = gc.FadeInSeconds
@@ -305,6 +312,10 @@ func runCreateConfig(_ *cobra.Command, args []string) error {
 	wf(&b, false,
 		"Vertical position of the focused (active) lyric line as a fraction of the frame height.\n0.0 = top of frame, 1.0 = bottom of frame.",
 		"lyric-position", "0.65")
+
+	wf(&b, false,
+		"Seconds to cross-fade between lyric lines. Set to 0 for hard cuts.",
+		"lyric-fade", "0.3")
 
 	// --- Fade-In ---
 	b.WriteString("\n\n# --- Fade-In ---\n")

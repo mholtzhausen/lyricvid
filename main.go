@@ -30,6 +30,7 @@ var (
 	transition         string
 	transitionDuration float64
 	lyricVPosition     float64
+	lyricFade          float64
 
 	// config
 	configFilePath string
@@ -141,6 +142,7 @@ func addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&transition, "transition", "fade", "Transition between images: fade|fadeblack|fadewhite|dissolve|wipeleft|wiperight|wipeup|wipedown|slideleft|slideright|radial|pixelize|none")
 	cmd.Flags().Float64Var(&transitionDuration, "transition-duration", 3.0, "Duration of transition effect in seconds")
 	cmd.Flags().Float64Var(&lyricVPosition, "lyric-position", 0.65, "Vertical position of the focused lyric line (0.0=top, 1.0=bottom)")
+	cmd.Flags().Float64Var(&lyricFade, "lyric-fade", 0.3, "Seconds to cross-fade between lyric lines; 0 = hard cut")
 
 	cmd.Flags().Float64Var(&fadeInSeconds, "fade-in-seconds", 0, "Seconds to fade from black at the start; 0 = no fade-in")
 	cmd.Flags().StringVar(&fadeInTitle, "fade-in-title", "", "Title text shown during fade-in; use | to separate multiple lines")
@@ -363,6 +365,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	p("bg-dim", fmt.Sprintf("%.2f", bgDim))
 	p("transition", transitionDesc)
 	p("lyric-position", fmt.Sprintf("%.2f", lyricVPosition))
+	p("lyric-fade", fmt.Sprintf("%.2fs", lyricFade))
 	fmt.Println()
 
 	if fadeInSeconds > 0 {
@@ -405,6 +408,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		Transition:         transition,
 		TransitionDuration: transitionDuration,
 		LyricVPosition:     lyricVPosition,
+		LyricFade:          lyricFade,
 
 		FadeInSeconds:      fadeInSeconds,
 		FadeInTitle:        fadeInTitle,
