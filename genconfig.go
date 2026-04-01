@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -170,6 +171,103 @@ func loadGenerateConfig(paths []string) (GenerateConfig, []string, error) {
 		}
 	}
 	return acc, loaded, nil
+}
+
+// saveGenerateConfig writes the CLI-changed flags into the YAML file at path,
+// merging with any existing content. The --save flag itself is never written.
+// saveGenerateConfig writes only the CLI-changed flags into the YAML file at
+// path, leaving all other content (and comments) untouched. Keys that already
+// exist in the file have their values updated in-place; new keys are appended.
+func saveGenerateConfig(cmd *cobra.Command, path string) error {
+	// Map every flag name to its YAML key (they're identical for all generate flags).
+	allFlags := []string{
+		"lyrics", "image", "output", "quality", "aspect-ratio",
+		"width", "height", "font-size", "font-size-reference",
+		"font-color", "highlight-color", "bg-dim",
+		"transition", "transition-duration",
+		"lyric-position", "lyric-fade", "lyric-fade-style",
+		"fade-in-seconds", "fade-in-title", "fade-in-title-fade-out",
+		"fade-in-font-size", "fade-in-font-color",
+		"fade-out-seconds", "fade-out-title", "fade-out-title-fade-out",
+		"fade-out-font-size", "fade-out-font-color",
+		"drift", "drift-max", "drift-min", "drift-duration-percentage", "drift-easing",
+		"enable-cuda",
+	}
+
+	type entry struct{ val, typ string }
+	updates := map[string]entry{}
+	for _, name := range allFlags {
+		if cmd.Flags().Changed(name) {
+			f := cmd.Flags().Lookup(name)
+			updates[name] = entry{f.Value.String(), f.Value.Type()}
+		}
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+
+	// Load existing file into a yaml.Node tree (preserves comments).
+	var docNode yaml.Node
+	if data, err := os.ReadFile(path); err == nil {
+		if err := yaml.Unmarshal(data, &docNode); err != nil {
+			return fmt.Errorf("parsing config %q: %w", path, err)
+		}
+	}
+	if docNode.Kind == 0 {
+		docNode = yaml.Node{
+			Kind: yaml.DocumentNode,
+			Content: []*yaml.Node{
+				{Kind: yaml.MappingNode, Tag: "!!map"},
+			},
+		}
+	}
+	mapping := docNode.Content[0]
+
+	for key, u := range updates {
+		yamlSetValue(mapping, key, u.val, u.typ)
+	}
+
+	// Marshal the document node; yaml.v3 prepends "---\n" for DocumentNode.
+	out, err := yaml.Marshal(&docNode)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	out = bytes.TrimPrefix(out, []byte("---\n"))
+	if err := os.WriteFile(path, out, 0644); err != nil {
+		return fmt.Errorf("writing config %q: %w", path, err)
+	}
+	return nil
+}
+
+// yamlSetValue finds key in a mapping node and updates its value, or appends
+// a new key/value pair if the key is not found.
+func yamlSetValue(mapping *yaml.Node, key, val, pflType string) {
+	tag := pflTypeToYAMLTag(pflType)
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content[i+1].Value = val
+			mapping.Content[i+1].Tag = tag
+			return
+		}
+	}
+	// Not found — append.
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: tag, Value: val},
+	)
+}
+
+func pflTypeToYAMLTag(pflType string) string {
+	switch pflType {
+	case "int":
+		return "!!int"
+	case "float64":
+		return "!!float"
+	case "bool":
+		return "!!bool"
+	default:
+		return "!!str"
+	}
 }
 
 // applyConfig applies config file values to the package-level flag variables,

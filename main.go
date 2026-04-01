@@ -104,9 +104,9 @@ It supports LRC (timestamped) and plain text lyrics files.`,
 	}
 
 	imagegenCmd := &cobra.Command{
-		Use:   "image-gen <mp3_file>",
+		Use:   "image-gen <mp3_file> [image_folder]",
 		Short: "Generate scene images from song lyrics using Gemini",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.RangeArgs(1, 2),
 		RunE:  runImagegen,
 	}
 	imagegenCmd.Flags().StringVar(&imagegenInspirationPath, "inspiration", "",
@@ -121,6 +121,15 @@ It supports LRC (timestamped) and plain text lyrics files.`,
 	imagegenCmd.Flags().StringVar(&imagegenAspectRatio, "aspect-ratio", "16:9",
 		"Image aspect ratio as W:H passed to Gemini (e.g. 16:9, 4:3, 1:1)")
 
+	saveCmd := &cobra.Command{
+		Use:   "save <audio> [config_file]",
+		Short: "Save CLI flags to a YAML config file without rendering",
+		Long:  "Saves the provided flags to a YAML config file. config_file defaults to lyricvid.yml in the audio file's directory.",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE:  runSave,
+	}
+	addFlags(saveCmd)
+
 	createConfigCmd := &cobra.Command{
 		Use:   "create-config [path]",
 		Short: "Write a YAML config file with all generate defaults",
@@ -132,6 +141,7 @@ It supports LRC (timestamped) and plain text lyrics files.`,
 	rootCmd.AddCommand(generateCmd)
 	rootCmd.AddCommand(setgeminiCmd)
 	rootCmd.AddCommand(imagegenCmd)
+	rootCmd.AddCommand(saveCmd)
 	rootCmd.AddCommand(createConfigCmd)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -277,16 +287,44 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 			}
 		}
 	} else {
-		if err := validateFile(imagePath, []string{".jpg", ".jpeg", ".png", ".webp"}); err != nil {
-			return fmt.Errorf("image: %w", err)
+		// Resolve relative paths against the audio directory so config-file
+		// values like "img_v2" work regardless of cwd.
+		if !filepath.IsAbs(imagePath) {
+			folder, _ := audioStem(audioPath)
+			imagePath = filepath.Join(folder, imagePath)
 		}
-		imagePaths = []string{imagePath}
+		info, err := os.Stat(imagePath)
+		if err != nil {
+			return fmt.Errorf("image: file not found: %s", imagePath)
+		}
+		if info.IsDir() {
+			entries, _ := os.ReadDir(imagePath)
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				switch strings.ToLower(filepath.Ext(e.Name())) {
+				case ".jpg", ".jpeg", ".png", ".webp":
+					imagePaths = append(imagePaths, filepath.Join(imagePath, e.Name()))
+				}
+			}
+		} else {
+			if err := validateFile(imagePath, []string{".jpg", ".jpeg", ".png", ".webp"}); err != nil {
+				return fmt.Errorf("image: %w", err)
+			}
+			imagePaths = []string{imagePath}
+		}
 	}
 
 	// Default output path: same folder and stem as audio, .mp4 extension
 	if outputPath == "" {
 		folder, stem := audioStem(audioPath)
-		outputPath = filepath.Join(folder, stem+".mp4")
+		imageLabel := filepath.Base(imagePath)
+		if imagePath == "" || imageLabel == "images" {
+			outputPath = filepath.Join(folder, stem+".mp4")
+		} else {
+			outputPath = filepath.Join(folder, imageLabel+" - "+stem+".mp4")
+		}
 	}
 
 	// Validate numeric parameters
@@ -525,6 +563,29 @@ func runSetGemini(_ *cobra.Command, args []string) error {
 	return nil
 }
 
+func runSave(cmd *cobra.Command, args []string) error {
+	audioPath := args[0]
+	if err := validateFile(audioPath, []string{".mp3", ".m4a", ".flac", ".wav"}); err != nil {
+		return fmt.Errorf("audio: %w", err)
+	}
+	audioDir, _ := audioStem(audioPath)
+
+	configFile := "lyricvid.yml"
+	if len(args) == 2 {
+		configFile = args[1]
+	}
+	saveDest := configFile
+	if !filepath.IsAbs(saveDest) {
+		saveDest = filepath.Join(audioDir, saveDest)
+	}
+
+	if err := saveGenerateConfig(cmd, saveDest); err != nil {
+		return fmt.Errorf("saving config: %w", err)
+	}
+	fmt.Printf("Config saved to %s\n", saveDest)
+	return nil
+}
+
 func runImagegen(_ *cobra.Command, args []string) error {
 	audioPath := args[0]
 
@@ -579,6 +640,13 @@ func runImagegen(_ *cobra.Command, args []string) error {
 
 	folder, _ := audioStem(audioPath)
 	outputDir := filepath.Join(folder, "images")
+	if len(args) == 2 {
+		if filepath.IsAbs(args[1]) {
+			outputDir = args[1]
+		} else {
+			outputDir = filepath.Join(folder, args[1])
+		}
+	}
 
 	return imagegen.Generate(context.Background(), imagegen.Config{
 		APIKey:          cfg.GeminiAPIKey,
