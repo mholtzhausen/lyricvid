@@ -31,6 +31,9 @@ var (
 	transitionDuration float64
 	lyricVPosition     float64
 
+	// config
+	configFilePath string
+
 	// generate flags
 	generateQuality string
 	aspectRatio     string
@@ -80,14 +83,14 @@ It supports LRC (timestamped) and plain text lyrics files.`,
 	}
 
 	setgeminiCmd := &cobra.Command{
-		Use:   "setgemini <api_key>",
+		Use:   "set-gemini <api_key>",
 		Short: "Store a Gemini API key in ~/.lyricvid.yaml (encrypted)",
 		Args:  cobra.ExactArgs(1),
 		RunE:  runSetGemini,
 	}
 
 	imagegenCmd := &cobra.Command{
-		Use:   "imagegen <mp3_file>",
+		Use:   "image-gen <mp3_file>",
 		Short: "Generate scene images from song lyrics using Gemini",
 		Args:  cobra.ExactArgs(1),
 		RunE:  runImagegen,
@@ -104,9 +107,18 @@ It supports LRC (timestamped) and plain text lyrics files.`,
 	imagegenCmd.Flags().StringVar(&imagegenAspectRatio, "aspect-ratio", "16:9",
 		"Image aspect ratio as W:H passed to Gemini (e.g. 16:9, 4:3, 1:1)")
 
+	createConfigCmd := &cobra.Command{
+		Use:   "create-config [path]",
+		Short: "Write a YAML config file with all generate defaults",
+		Long:  "Writes a fully-commented YAML config file. Defaults to ./lyricvid.yml if no path is given.",
+		Args:  cobra.MaximumNArgs(1),
+		RunE:  runCreateConfig,
+	}
+
 	rootCmd.AddCommand(generateCmd)
 	rootCmd.AddCommand(setgeminiCmd)
 	rootCmd.AddCommand(imagegenCmd)
+	rootCmd.AddCommand(createConfigCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -114,6 +126,7 @@ It supports LRC (timestamped) and plain text lyrics files.`,
 }
 
 func addFlags(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&configFilePath, "config", "", "Path to a YAML config file (overrides auto-detected lyricvid.yml / <stem>.yml)")
 	cmd.Flags().StringVar(&lyricsPath, "lyrics", "", "Path to lyrics file (.lrc or .txt); auto-detected from audio directory if omitted")
 	cmd.Flags().StringVar(&imagePath, "image", "", "Path to background image; auto-detected from FOLDER/images/ if omitted, black background if none found")
 	cmd.Flags().StringVar(&outputPath, "output", "", "Output video file path (default: same folder and name as audio, with .mp4 extension)")
@@ -155,6 +168,33 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("audio: %w", err)
 	}
 
+	// Load config files (lowest → highest priority):
+	//   <audio-dir>/lyricvid.yml, <audio-dir>/<stem>.yml, --config <path>
+	audioDir, audioStemName := audioStem(audioPath)
+	cfgPaths := []string{
+		filepath.Join(audioDir, "lyricvid.yml"),
+		filepath.Join(audioDir, audioStemName+".yml"),
+	}
+	if configFilePath != "" {
+		if _, err := os.Stat(configFilePath); err != nil {
+			return fmt.Errorf("config file not found: %s", configFilePath)
+		}
+		cfgPaths = append(cfgPaths, configFilePath)
+	}
+	gc, loadedCfgPaths, err := loadGenerateConfig(cfgPaths)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	applyConfig(cmd, gc)
+
+	// Auto-enable fade-in/out if a title is set but duration was left at 0
+	if fadeInTitle != "" && fadeInSeconds == 0 && !cmd.Flags().Changed("fade-in-seconds") {
+		fadeInSeconds = 2.0
+	}
+	if fadeOutTitle != "" && fadeOutSeconds == 0 && !cmd.Flags().Changed("fade-out-seconds") {
+		fadeOutSeconds = 3.0
+	}
+
 	// Apply quality preset if specified
 	if generateQuality != "" {
 		preset, ok := imagegen.QualityPresets[generateQuality]
@@ -170,8 +210,8 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Auto-scale font size proportional to width (reference: 1920px → 38pt)
-	// unless the user explicitly set --font-size
-	if !cmd.Flags().Changed("font-size") {
+	// unless the user explicitly set --font-size or a config file provided one
+	if !cmd.Flags().Changed("font-size") && gc.FontSize == 0 {
 		fontSize = int(math.Round(38.0 * float64(width) / 1920.0))
 		if fontSize < 8 {
 			fontSize = 8
@@ -278,20 +318,76 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		transitionDesc = fmt.Sprintf("%s  %.1fs", transition, transitionDuration)
 	}
 
-	fmt.Printf("  audio       %s  (%s)\n", audioPath, formatDuration(duration))
-	fmt.Printf("  lyrics      %s\n", lyricsDesc)
-	fmt.Printf("  images      %s\n", imagesDesc)
-	fmt.Printf("  output      %s\n", outputPath)
-	fmt.Printf("  video       %dx%d  ·  font %dpt  ·  bg-dim %.2f  ·  transition %s\n\n",
-		width, height, fontSize, bgDim, transitionDesc)
-
-	// Resolve fade title font colors — default to --font-color
-	if !cmd.Flags().Changed("fade-in-font-color") {
+	// Resolve fade title font colors — default to --font-color unless config provided one
+	// (must happen before printing so the summary shows the final value)
+	if !cmd.Flags().Changed("fade-in-font-color") && gc.FadeInFontColor == "" {
 		fadeInFontColor = fontColor
 	}
-	if !cmd.Flags().Changed("fade-out-font-color") {
+	if !cmd.Flags().Changed("fade-out-font-color") && gc.FadeOutFontColor == "" {
 		fadeOutFontColor = fontColor
 	}
+
+	// Print summary
+	p := func(label, value string) { fmt.Printf("  %-24s %s\n", label, value) }
+
+	if len(loadedCfgPaths) == 0 {
+		p("config", "none")
+	} else {
+		for i, cp := range loadedCfgPaths {
+			if i == 0 {
+				p("config", cp)
+			} else {
+				p("", cp)
+			}
+		}
+	}
+	fmt.Println()
+
+	p("audio", fmt.Sprintf("%s  (%s)", audioPath, formatDuration(duration)))
+	p("lyrics", lyricsDesc)
+	p("images", imagesDesc)
+	p("output", outputPath)
+	fmt.Println()
+
+	p("quality", func() string {
+		if generateQuality != "" {
+			return generateQuality
+		}
+		return "auto"
+	}())
+	p("size", fmt.Sprintf("%dx%d", width, height))
+	p("aspect-ratio", aspectRatio)
+	p("font-size", fmt.Sprintf("%dpt", fontSize))
+	p("font-color", fontColor)
+	p("highlight-color", highlightColor)
+	p("bg-dim", fmt.Sprintf("%.2f", bgDim))
+	p("transition", transitionDesc)
+	p("lyric-position", fmt.Sprintf("%.2f", lyricVPosition))
+	fmt.Println()
+
+	if fadeInSeconds > 0 {
+		p("fade-in", fmt.Sprintf("%.1fs", fadeInSeconds))
+		if fadeInTitle != "" {
+			p("fade-in-title", fadeInTitle)
+			p("fade-in-title-fade-out", fmt.Sprintf("%.1fs", fadeInTitleFadeOut))
+			p("fade-in-font-size", fadeInFontSize)
+			p("fade-in-font-color", fadeInFontColor)
+		}
+	} else {
+		p("fade-in", "disabled")
+	}
+	if fadeOutSeconds > 0 {
+		p("fade-out", fmt.Sprintf("%.1fs", fadeOutSeconds))
+		if fadeOutTitle != "" {
+			p("fade-out-title", fadeOutTitle)
+			p("fade-out-title-fade-out", fmt.Sprintf("%.1fs", fadeOutTitleFadeOut))
+			p("fade-out-font-size", fadeOutFontSize)
+			p("fade-out-font-color", fadeOutFontColor)
+		}
+	} else {
+		p("fade-out", "disabled")
+	}
+	fmt.Println()
 
 	// Render video
 	cfg := video.Config{
@@ -363,7 +459,7 @@ func runImagegen(_ *cobra.Command, args []string) error {
 		fmt.Println("Gemini API key saved to ~/.lyricvid.yaml")
 	}
 	if cfg.GeminiAPIKey == "" {
-		return fmt.Errorf("no Gemini API key; use --api-key or run 'setgemini <key>'")
+		return fmt.Errorf("no Gemini API key; use --api-key or run 'set-gemini <key>'")
 	}
 
 	inspirationPath := imagegenInspirationPath
