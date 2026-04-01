@@ -8,6 +8,10 @@ lyricvid
 *.jpg
 *.png
 
+# Dev Artifacts
+*.log
+examples/*
+
 # Go
 *.test
 *.out
