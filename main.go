@@ -148,13 +148,13 @@ func addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&fadeInTitle, "fade-in-title", "", "Title text shown during fade-in; use | to separate multiple lines")
 	cmd.Flags().Float64Var(&fadeInTitleFadeOut, "fade-in-title-fade-out", 1, "Seconds to fade out the title after the fade-in period ends")
 	cmd.Flags().StringVar(&fadeInFontSize, "fade-in-font-size", "60", "Font size(s) for fade-in title; use | to set per-line sizes (last size is the default for remaining lines)")
-	cmd.Flags().StringVar(&fadeInFontColor, "fade-in-font-color", "", "Font color for fade-in title (defaults to --font-color)")
+	cmd.Flags().StringVar(&fadeInFontColor, "fade-in-font-color", "", "Font color(s) for fade-in title; use | for per-line colors (defaults to --font-color)")
 
 	cmd.Flags().Float64Var(&fadeOutSeconds, "fade-out-seconds", 0, "Seconds to fade to black at the end; 0 = no fade-out")
 	cmd.Flags().StringVar(&fadeOutTitle, "fade-out-title", "", "Title text shown during fade-out; use | to separate multiple lines")
 	cmd.Flags().Float64Var(&fadeOutTitleFadeOut, "fade-out-title-fade-out", 1, "Seconds to fade in the title before the fade-out period starts")
 	cmd.Flags().StringVar(&fadeOutFontSize, "fade-out-font-size", "60", "Font size(s) for fade-out title; use | to set per-line sizes (last size is the default for remaining lines)")
-	cmd.Flags().StringVar(&fadeOutFontColor, "fade-out-font-color", "", "Font color for fade-out title (defaults to --font-color)")
+	cmd.Flags().StringVar(&fadeOutFontColor, "fade-out-font-color", "", "Font color(s) for fade-out title; use | for per-line colors (defaults to --font-color)")
 }
 
 func runGenerate(cmd *cobra.Command, args []string) error {
@@ -414,13 +414,13 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		FadeInTitle:        fadeInTitle,
 		FadeInTitleFadeOut: fadeInTitleFadeOut,
 		FadeInFontSizes:    parsePipeSizes(fadeInFontSize, 60),
-		FadeInFontColor:    fadeInFontColor,
+		FadeInFontColors:   parsePipeColors(fadeInFontColor),
 
 		FadeOutSeconds:      fadeOutSeconds,
 		FadeOutTitle:        fadeOutTitle,
 		FadeOutTitleFadeOut: fadeOutTitleFadeOut,
 		FadeOutFontSizes:    parsePipeSizes(fadeOutFontSize, 60),
-		FadeOutFontColor:    fadeOutFontColor,
+		FadeOutFontColors:   parsePipeColors(fadeOutFontColor),
 	}
 
 	return video.Render(cfg)
@@ -555,6 +555,24 @@ func parsePipeSizes(s string, defaultSize int) []int {
 		return []int{defaultSize}
 	}
 	return sizes
+}
+
+func parsePipeColors(s string) []string {
+	if s == "" {
+		return []string{"#FFFFFF"}
+	}
+	parts := strings.Split(s, "|")
+	var colors []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			colors = append(colors, p)
+		}
+	}
+	if len(colors) == 0 {
+		return []string{"#FFFFFF"}
+	}
+	return colors
 }
 
 func validateFile(path string, allowedExts []string) error {

@@ -337,7 +337,7 @@ func runCreateConfig(_ *cobra.Command, args []string) error {
 		"fade-in-font-size", `"60"`)
 
 	wf(&b, true,
-		"Font color for the fade-in title. Defaults to font-color when not set.\nAccepts hex (#RRGGBB) or FFmpeg named colors.",
+		"Font color(s) for the fade-in title. Defaults to font-color when not set.\nUse | to set different colors per line. The last value is used for any remaining lines.\nAccepts hex (#RRGGBB) or FFmpeg named colors.",
 		"fade-in-font-color", `""`)
 
 	// --- Fade-Out ---
@@ -360,7 +360,7 @@ func runCreateConfig(_ *cobra.Command, args []string) error {
 		"fade-out-font-size", `"60"`)
 
 	wf(&b, true,
-		"Font color for the fade-out title. Defaults to font-color when not set.\nAccepts hex (#RRGGBB) or FFmpeg named colors.",
+		"Font color(s) for the fade-out title. Defaults to font-color when not set.\nUse | to set different colors per line. The last value is used for any remaining lines.\nAccepts hex (#RRGGBB) or FFmpeg named colors.",
 		"fade-out-font-color", `""`)
 
 	b.WriteString("\n")

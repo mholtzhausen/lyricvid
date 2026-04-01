@@ -31,18 +31,19 @@ type Config struct {
 	TransitionDuration float64 // seconds
 	LyricVPosition     float64 // vertical position of focused lyric, 0.0=top 1.0=bottom
 	LyricFade          float64 // seconds to cross-fade between lyric lines; 0 = hard cut
+	LyricFadeStyle     string  // alpha curve for lyric cross-fade: "linear" (default) or "smooth"
 
 	FadeInSeconds      float64  // 0 = no fade-in
 	FadeInTitle        string   // pipe-separated lines; empty = no title
 	FadeInTitleFadeOut float64  // seconds to fade out title after fade-in ends
 	FadeInFontSizes    []int    // per-line sizes; last entry used for overflow
-	FadeInFontColor    string
+	FadeInFontColors   []string // per-line colors; last entry used for overflow
 
 	FadeOutSeconds      float64
 	FadeOutTitle        string
 	FadeOutTitleFadeOut float64
 	FadeOutFontSizes    []int
-	FadeOutFontColor    string
+	FadeOutFontColors   []string // per-line colors; last entry used for overflow
 }
 
 // Render builds and executes the FFmpeg command to produce the video.
@@ -167,7 +168,7 @@ func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 	for i, line := range cfg.Lines {
 		dt := buildDrawtext(fontPath, highlightSize, cfg.HighlightColor, "1.0",
 			"(w-text_w)/2", fmt.Sprintf("(h*%.4f)-(%d/2)", cfg.LyricVPosition, highlightSize),
-			line.Text, line.StartTime, line.EndTime, cfg.LyricFade)
+			line.Text, line.StartTime, line.EndTime, cfg.LyricFade, cfg.LyricFadeStyle)
 		chain = append(chain, dt)
 
 		for offset := -2; offset <= 2; offset++ {
@@ -185,7 +186,7 @@ func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 			}
 			dt := buildDrawtext(fontPath, contextSize, cfg.FontColor, opacity,
 				"(w-text_w)/2", yExpr,
-				cfg.Lines[ctxIdx].Text, line.StartTime, line.EndTime, cfg.LyricFade)
+				cfg.Lines[ctxIdx].Text, line.StartTime, line.EndTime, cfg.LyricFade, cfg.LyricFadeStyle)
 			chain = append(chain, dt)
 		}
 	}
@@ -208,7 +209,7 @@ func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 			alphaExpr = "1"
 		}
 		dts := buildTitleDrawtexts(fontPath, strings.Split(cfg.FadeInTitle, "|"),
-			cfg.FadeInFontSizes, cfg.FadeInFontColor, 0, enableEnd, alphaExpr)
+			cfg.FadeInFontSizes, cfg.FadeInFontColors, 0, enableEnd, alphaExpr)
 		chain = append(chain, dts...)
 	}
 
@@ -238,7 +239,7 @@ func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 			alphaExpr = "1"
 		}
 		dts := buildTitleDrawtexts(fontPath, strings.Split(cfg.FadeOutTitle, "|"),
-			cfg.FadeOutFontSizes, cfg.FadeOutFontColor, enableStart, cfg.Duration, alphaExpr)
+			cfg.FadeOutFontSizes, cfg.FadeOutFontColors, enableStart, cfg.Duration, alphaExpr)
 		chain = append(chain, dts...)
 	}
 
@@ -252,7 +253,7 @@ func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 
 // buildTitleDrawtexts produces one drawtext filter per title line, centered as a block.
 // alphaExpr is an FFmpeg expression for per-frame alpha (can be "1" for constant).
-func buildTitleDrawtexts(fontPath string, lines []string, fontSizes []int, color string,
+func buildTitleDrawtexts(fontPath string, lines []string, fontSizes []int, colors []string,
 	enableStart, enableEnd float64, alphaExpr string) []string {
 
 	if len(lines) == 0 {
@@ -269,6 +270,19 @@ func buildTitleDrawtexts(fontPath string, lines []string, fontSizes []int, color
 			sizes[i] = fontSizes[len(fontSizes)-1]
 		default:
 			sizes[i] = 60
+		}
+	}
+
+	// Resolve per-line colors; last provided color is the fallback.
+	lineColors := make([]string, len(lines))
+	for i := range lines {
+		switch {
+		case i < len(colors):
+			lineColors[i] = colors[i]
+		case len(colors) > 0:
+			lineColors[i] = colors[len(colors)-1]
+		default:
+			lineColors[i] = "#FFFFFF"
 		}
 	}
 
@@ -292,7 +306,7 @@ func buildTitleDrawtexts(fontPath string, lines []string, fontSizes []int, color
 		escapedText := escapeDrawtext(line)
 		dt := fmt.Sprintf(
 			"drawtext=%sfontsize=%d:fontcolor=%s:x=(w-text_w)/2:y=%s:text='%s':enable='between(t,%.3f,%.3f)':alpha='%s'",
-			fontSpec, sizes[i], color, yExpr, escapedText, enableStart, enableEnd, alphaExpr,
+			fontSpec, sizes[i], lineColors[i], yExpr, escapedText, enableStart, enableEnd, alphaExpr,
 		)
 		result = append(result, dt)
 		yOffset += lineHeights[i]
@@ -373,7 +387,7 @@ func buildBgSource(cfg Config, w, h int, dim float64) (string, error) {
 	}
 }
 
-func buildDrawtext(fontPath string, fontSize int, color, opacity, x, y, text string, start, end, lyricFade float64) string {
+func buildDrawtext(fontPath string, fontSize int, color, opacity, x, y, text string, start, end, lyricFade float64, lyricFadeStyle string) string {
 	escapedText := escapeDrawtext(text)
 
 	fontSpec := ""
@@ -400,9 +414,23 @@ func buildDrawtext(fontPath string, fontSize int, color, opacity, x, y, text str
 		}
 		// Alpha ramps: fade-in during [enableStart, start], hold, fade-out during [end-fade, end]
 		fadeOutStart := end - fade
+
+		var fadeInExpr, fadeOutExpr string
+		switch lyricFadeStyle {
+		case "smooth":
+			// Cubic smoothstep: p*p*(3-2*p) where p is progress 0→1
+			pin := fmt.Sprintf("((t-%.3f)/%.3f)", enableStart, fade)
+			fadeInExpr = fmt.Sprintf("%s*%s*(3-2*%s)", pin, pin, pin)
+			pout := fmt.Sprintf("((%.3f-t)/%.3f)", end, fade)
+			fadeOutExpr = fmt.Sprintf("%s*%s*(3-2*%s)", pout, pout, pout)
+		default: // "linear"
+			fadeInExpr = fmt.Sprintf("(t-%.3f)/%.3f", enableStart, fade)
+			fadeOutExpr = fmt.Sprintf("(%.3f-t)/%.3f", end, fade)
+		}
+
 		alphaExpr := fmt.Sprintf(
-			"if(lt(t,%.3f),(t-%.3f)/%.3f,if(gt(t,%.3f),(%.3f-t)/%.3f,1))",
-			start, enableStart, fade, fadeOutStart, end, fade,
+			"if(lt(t,%.3f),%s,if(gt(t,%.3f),%s,1))",
+			start, fadeInExpr, fadeOutStart, fadeOutExpr,
 		)
 		return fmt.Sprintf(
 			"drawtext=%sfontsize=%d:fontcolor=%s:x=%s:y=%s:text='%s':enable='between(t,%.3f,%.3f)':alpha='%s'",
