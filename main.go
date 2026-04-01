@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/user/lyricvid/internal/audio"
+	"github.com/user/lyricvid/internal/config"
 	"github.com/user/lyricvid/internal/lyrics"
 	"github.com/user/lyricvid/internal/video"
 )
@@ -48,7 +49,15 @@ It supports LRC (timestamped) and plain text lyrics files.`,
 		addFlags(cmd)
 	}
 
+	setgeminiCmd := &cobra.Command{
+		Use:   "setgemini <api_key>",
+		Short: "Store a Gemini API key in ~/.lyricvid.yaml (encrypted)",
+		Args:  cobra.ExactArgs(1),
+		RunE:  runSetGemini,
+	}
+
 	rootCmd.AddCommand(generateCmd)
+	rootCmd.AddCommand(setgeminiCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -193,6 +202,19 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	return video.Render(cfg)
+}
+
+func runSetGemini(_ *cobra.Command, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cfg.GeminiAPIKey = args[0]
+	if err := config.Save(cfg); err != nil {
+		return err
+	}
+	fmt.Println("Gemini API key saved to ~/.lyricvid.yaml")
+	return nil
 }
 
 func audioStem(audioPath string) (folder, stem string) {
