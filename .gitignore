@@ -1,0 +1,13 @@
+# Build output
+lyricvid
+
+# Test artifacts
+*.mp4
+*.mp3
+*.lrc
+*.jpg
+*.png
+
+# Go
+*.test
+*.out
