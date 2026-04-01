@@ -212,7 +212,17 @@ func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 		chain = append(chain, dts...)
 	}
 
-	// 4. Fade-out title (drawn before fade-out so it darkens with the video)
+	// 4. Fade-out (darkens lyrics and background, but not the fade-out title)
+	if cfg.FadeOutSeconds > 0 {
+		start := cfg.Duration - cfg.FadeOutSeconds
+		if start < 0 {
+			start = 0
+		}
+		chain = append(chain, fmt.Sprintf(
+			"fade=type=out:start_time=%.3f:duration=%.3f", start, cfg.FadeOutSeconds))
+	}
+
+	// 5. Fade-out title (drawn after fade-out so it is not dimmed; uses its own alpha via --fade-out-title-fade-out)
 	if cfg.FadeOutSeconds > 0 && cfg.FadeOutTitle != "" {
 		fadeOutStart := cfg.Duration - cfg.FadeOutSeconds
 		enableStart := fadeOutStart - cfg.FadeOutTitleFadeOut
@@ -230,16 +240,6 @@ func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 		dts := buildTitleDrawtexts(fontPath, strings.Split(cfg.FadeOutTitle, "|"),
 			cfg.FadeOutFontSizes, cfg.FadeOutFontColor, enableStart, cfg.Duration, alphaExpr)
 		chain = append(chain, dts...)
-	}
-
-	// 5. Fade-out (darkens everything including the title drawn above)
-	if cfg.FadeOutSeconds > 0 {
-		start := cfg.Duration - cfg.FadeOutSeconds
-		if start < 0 {
-			start = 0
-		}
-		chain = append(chain, fmt.Sprintf(
-			"fade=type=out:start_time=%.3f:duration=%.3f", start, cfg.FadeOutSeconds))
 	}
 
 	if len(chain) == 0 {
