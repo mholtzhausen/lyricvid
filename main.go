@@ -55,7 +55,7 @@ It supports LRC (timestamped) and plain text lyrics files.`,
 func addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&lyricsPath, "lyrics", "", "Path to lyrics file (.lrc or .txt); auto-detected from audio directory if omitted")
 	cmd.Flags().StringVar(&imagePath, "image", "", "Path to background image; auto-detected from FOLDER/images/ if omitted, black background if none found")
-	cmd.Flags().StringVar(&outputPath, "output", "output.mp4", "Output video file path")
+	cmd.Flags().StringVar(&outputPath, "output", "", "Output video file path (default: same folder and name as audio, with .mp4 extension)")
 	cmd.Flags().IntVar(&width, "width", 1920, "Video width in pixels")
 	cmd.Flags().IntVar(&height, "height", 1080, "Video height in pixels")
 	cmd.Flags().IntVar(&fontSize, "font-size", 38, "Base font size for lyrics")
@@ -121,6 +121,12 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("image: %w", err)
 		}
 		imagePaths = []string{imagePath}
+	}
+
+	// Default output path: same folder and stem as audio, .mp4 extension
+	if outputPath == "" {
+		folder, stem := audioStem(audioPath)
+		outputPath = filepath.Join(folder, stem+".mp4")
 	}
 
 	// Validate numeric parameters
