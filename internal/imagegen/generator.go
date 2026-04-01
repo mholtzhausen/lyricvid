@@ -45,6 +45,7 @@ type Config struct {
 	OutputDir       string // absolute path; created if absent
 	ImageSize       string // Gemini ImageConfig.ImageSize: "1K", "2K", "4K"
 	Style           string // optional visual style injected into every prompt
+	AspectRatio     string // e.g. "16:9"; passed directly to Gemini ImageConfig.AspectRatio
 }
 
 // Generate builds a story arc and produces Count images, saving them to OutputDir.
@@ -146,7 +147,7 @@ func generateImage(ctx context.Context, client *genai.Client, cfg Config, scene 
 				ThinkingLevel: genai.ThinkingLevelMinimal,
 			},
 			ImageConfig: &genai.ImageConfig{
-				AspectRatio: "16:9",
+				AspectRatio: cfg.AspectRatio,
 				ImageSize:   cfg.ImageSize,
 			},
 		},

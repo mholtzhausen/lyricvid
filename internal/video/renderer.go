@@ -203,7 +203,16 @@ func buildBgSource(cfg Config, w, h int, dim float64) (string, error) {
 		), nil
 	default:
 		n := len(cfg.ImagePaths)
-		perImage := cfg.Duration / float64(n)
+		t := cfg.Transition
+		td := 0.0
+		if t != "" && t != "none" {
+			td = cfg.TransitionDuration
+		}
+		// Each image must be longer than its nominal share to compensate for xfade
+		// overlaps: total_output = n*perImage - (n-1)*td, so solve for perImage
+		// such that total_output == cfg.Duration.
+		perImage := (cfg.Duration + float64(n-1)*td) / float64(n)
+
 		var parts []string
 		for i := range cfg.ImagePaths {
 			parts = append(parts, fmt.Sprintf(
@@ -218,7 +227,6 @@ func buildBgSource(cfg Config, w, h int, dim float64) (string, error) {
 			))
 		}
 
-		t := cfg.Transition
 		if t == "" || t == "none" {
 			concatInputs := ""
 			for i := range cfg.ImagePaths {
@@ -228,7 +236,6 @@ func buildBgSource(cfg Config, w, h int, dim float64) (string, error) {
 			return strings.Join(parts, ";\n"), nil
 		}
 
-		td := cfg.TransitionDuration
 		if td >= perImage {
 			return "", fmt.Errorf("transition-duration (%.1fs) must be less than per-image duration (%.1fs)", td, perImage)
 		}

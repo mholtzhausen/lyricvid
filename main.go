@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -29,12 +31,17 @@ var (
 	transitionDuration float64
 	lyricVPosition     float64
 
+	// generate flags
+	generateQuality string
+	aspectRatio     string
+
 	// imagegen flags
 	imagegenInspirationPath string
 	imagegenCount           int
 	imagegenAPIKey          string
 	imagegenQuality         string
 	imagegenStyle           string
+	imagegenAspectRatio     string
 )
 
 func main() {
@@ -80,6 +87,8 @@ It supports LRC (timestamped) and plain text lyrics files.`,
 		"Output quality: 480p, 720p, 1080p, 1440p (16:9 aspect ratio)")
 	imagegenCmd.Flags().StringVar(&imagegenStyle, "style", "",
 		"Visual style/theme applied to every generated image (e.g. \"cinematic film noir, high contrast\")")
+	imagegenCmd.Flags().StringVar(&imagegenAspectRatio, "aspect-ratio", "16:9",
+		"Image aspect ratio as W:H passed to Gemini (e.g. 16:9, 4:3, 1:1)")
 
 	rootCmd.AddCommand(generateCmd)
 	rootCmd.AddCommand(setgeminiCmd)
@@ -94,8 +103,10 @@ func addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&lyricsPath, "lyrics", "", "Path to lyrics file (.lrc or .txt); auto-detected from audio directory if omitted")
 	cmd.Flags().StringVar(&imagePath, "image", "", "Path to background image; auto-detected from FOLDER/images/ if omitted, black background if none found")
 	cmd.Flags().StringVar(&outputPath, "output", "", "Output video file path (default: same folder and name as audio, with .mp4 extension)")
-	cmd.Flags().IntVar(&width, "width", 1920, "Video width in pixels")
-	cmd.Flags().IntVar(&height, "height", 1080, "Video height in pixels")
+	cmd.Flags().StringVar(&generateQuality, "quality", "", "Output quality: 480p, 720p, 1080p, 1440p (overrides --width/--height when set)")
+	cmd.Flags().StringVar(&aspectRatio, "aspect-ratio", "16:9", "Video aspect ratio as W:H (e.g. 16:9, 4:3, 21:9); used with --quality to compute width")
+	cmd.Flags().IntVar(&width, "width", 1920, "Video width in pixels (ignored when --quality is set)")
+	cmd.Flags().IntVar(&height, "height", 1080, "Video height in pixels (ignored when --quality is set)")
 	cmd.Flags().IntVar(&fontSize, "font-size", 38, "Base font size for lyrics")
 	cmd.Flags().StringVar(&fontColor, "font-color", "#FFFFFF", "Font color for context lyrics")
 	cmd.Flags().StringVar(&highlightColor, "highlight-color", "#FFD700", "Font color for active lyric line")
@@ -118,6 +129,29 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("audio: %w", err)
 	}
 
+	// Apply quality preset if specified
+	if generateQuality != "" {
+		preset, ok := imagegen.QualityPresets[generateQuality]
+		if !ok {
+			return fmt.Errorf("unsupported quality %q; valid values: 480p, 720p, 1080p, 1440p", generateQuality)
+		}
+		height = preset.Height
+		w, err := computeWidthFromAspect(preset.Height, aspectRatio)
+		if err != nil {
+			return fmt.Errorf("aspect-ratio: %w", err)
+		}
+		width = w
+	}
+
+	// Auto-scale font size proportional to width (reference: 1920px → 38pt)
+	// unless the user explicitly set --font-size
+	if !cmd.Flags().Changed("font-size") {
+		fontSize = int(math.Round(38.0 * float64(width) / 1920.0))
+		if fontSize < 8 {
+			fontSize = 8
+		}
+	}
+
 	// Auto-detect lyrics if not specified
 	if lyricsPath == "" {
 		folder, stem := audioStem(audioPath)
@@ -125,7 +159,6 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 			candidate := filepath.Join(folder, stem+ext)
 			if _, err := os.Stat(candidate); err == nil {
 				lyricsPath = candidate
-				fmt.Printf("Auto-detected lyrics: %s\n", lyricsPath)
 				break
 			}
 		}
@@ -152,11 +185,6 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 				}
 			}
 		}
-		if len(imagePaths) > 0 {
-			fmt.Printf("Auto-detected %d image(s) from %s\n", len(imagePaths), filepath.Join(filepath.Dir(audioPath), "images"))
-		} else {
-			fmt.Println("No images found; using black background")
-		}
 	} else {
 		if err := validateFile(imagePath, []string{".jpg", ".jpeg", ".png", ".webp"}); err != nil {
 			return fmt.Errorf("image: %w", err)
@@ -182,32 +210,54 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get audio duration
-	fmt.Println("Analyzing audio...")
 	duration, err := audio.GetDuration(audioPath)
 	if err != nil {
 		return fmt.Errorf("getting audio duration: %w", err)
 	}
-	fmt.Printf("Audio duration: %.1f seconds\n", duration)
 
 	// Parse lyrics
 	var lines []lyrics.Line
+	var lyricsDesc string
 	if lyricsPath != "" {
-		fmt.Println("Parsing lyrics...")
 		var isLRC bool
 		lines, isLRC, err = lyrics.ParseFile(lyricsPath)
 		if err != nil {
 			return fmt.Errorf("parsing lyrics: %w", err)
 		}
 		if isLRC {
-			fmt.Printf("Parsed %d timestamped lyric lines (LRC format)\n", len(lines))
 			lyrics.SetEndTimes(lines, duration)
+			lyricsDesc = fmt.Sprintf("%s  (%d lines · LRC)", lyricsPath, len(lines))
 		} else {
-			fmt.Printf("Parsed %d lyric lines (plain text, distributing evenly)\n", len(lines))
 			lyrics.DistributeEvenly(lines, duration)
+			lyricsDesc = fmt.Sprintf("%s  (%d lines · plain text)", lyricsPath, len(lines))
 		}
 	} else {
-		fmt.Println("No lyrics; rendering video without text")
+		lyricsDesc = "none"
 	}
+
+	// Images description
+	var imagesDesc string
+	switch len(imagePaths) {
+	case 0:
+		imagesDesc = "black background"
+	case 1:
+		imagesDesc = imagePaths[0]
+	default:
+		imagesDesc = fmt.Sprintf("%d images  (%s)", len(imagePaths), filepath.Dir(imagePaths[0]))
+	}
+
+	// Transition description
+	transitionDesc := "none"
+	if transition != "" && transition != "none" {
+		transitionDesc = fmt.Sprintf("%s  %.1fs", transition, transitionDuration)
+	}
+
+	fmt.Printf("  audio       %s  (%s)\n", audioPath, formatDuration(duration))
+	fmt.Printf("  lyrics      %s\n", lyricsDesc)
+	fmt.Printf("  images      %s\n", imagesDesc)
+	fmt.Printf("  output      %s\n", outputPath)
+	fmt.Printf("  video       %dx%d  ·  font %dpt  ·  bg-dim %.2f  ·  transition %s\n\n",
+		width, height, fontSize, bgDim, transitionDesc)
 
 	// Render video
 	cfg := video.Config{
@@ -298,7 +348,6 @@ func runImagegen(_ *cobra.Command, args []string) error {
 	folder, _ := audioStem(audioPath)
 	outputDir := filepath.Join(folder, "images")
 
-	_ = preset // width/height available for future use (e.g. passing to generate cmd)
 	return imagegen.Generate(context.Background(), imagegen.Config{
 		APIKey:          cfg.GeminiAPIKey,
 		InspirationText: strings.TrimSpace(string(inspirationText)),
@@ -306,7 +355,30 @@ func runImagegen(_ *cobra.Command, args []string) error {
 		OutputDir:       outputDir,
 		ImageSize:       preset.ImageSize,
 		Style:           imagegenStyle,
+		AspectRatio:     imagegenAspectRatio,
 	})
+}
+
+func formatDuration(secs float64) string {
+	total := int(math.Round(secs))
+	return fmt.Sprintf("%d:%02d", total/60, total%60)
+}
+
+func computeWidthFromAspect(height int, ratio string) (int, error) {
+	parts := strings.SplitN(ratio, ":", 2)
+	if len(parts) != 2 {
+		return 0, fmt.Errorf("invalid aspect ratio %q, expected W:H (e.g. 16:9)", ratio)
+	}
+	wPart, err1 := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	hPart, err2 := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	if err1 != nil || err2 != nil || hPart == 0 {
+		return 0, fmt.Errorf("invalid aspect ratio %q, expected W:H (e.g. 16:9)", ratio)
+	}
+	w := int(math.Round(float64(height) * wPart / hPart))
+	if w%2 != 0 {
+		w++ // libx264 requires even dimensions
+	}
+	return w, nil
 }
 
 func audioStem(audioPath string) (folder, stem string) {
