@@ -47,6 +47,9 @@ type GenerateConfig struct {
 	DriftDurationPct    float64 `yaml:"drift-duration-percentage,omitempty"`
 	DriftEasing         string  `yaml:"drift-easing,omitempty"`
 	EnableCUDA          string  `yaml:"enable-cuda,omitempty"` // "true" or "false"; empty = not configured
+
+	// image-gen settings
+	ImagegenInspirationText string `yaml:"imagegen-inspiration,omitempty"`
 }
 
 // loadGenerateConfig loads and merges one or more YAML config files in order.
@@ -168,6 +171,9 @@ func loadGenerateConfig(paths []string) (GenerateConfig, []string, error) {
 		}
 		if tmp.EnableCUDA != "" {
 			acc.EnableCUDA = tmp.EnableCUDA
+		}
+		if tmp.ImagegenInspirationText != "" {
+			acc.ImagegenInspirationText = tmp.ImagegenInspirationText
 		}
 	}
 	return acc, loaded, nil
@@ -554,6 +560,18 @@ func runCreateConfig(_ *cobra.Command, args []string) error {
 	wf(&b, false,
 		"Enable CUDA hardware acceleration for encoding (h264_nvenc).\nWhen true, CUDA availability is probed on each run; falls back to libx264 if not found.\nSet to false to always use CPU encoding (libx264).\nValid values: true, false",
 		"enable-cuda", `"true"`)
+
+	// --- Image Generation ---
+	b.WriteString("\n\n# --- Image Generation ---\n")
+
+	b.WriteString("\n")
+	b.WriteString("# Inspiration text for the 'lyricvid image-gen' command.\n")
+	b.WriteString("# Embed your lyrics or descriptive text directly instead of a separate file.\n")
+	b.WriteString("# Used when --inspiration is not given and no .lrc/.txt is auto-detected.\n")
+	b.WriteString("# Use a YAML literal block scalar (|) for multi-line content.\n")
+	b.WriteString("# imagegen-inspiration: |\n")
+	b.WriteString("#   Paste your song lyrics or scene description here.\n")
+	b.WriteString("#   Each line is preserved as-is.\n")
 
 	b.WriteString("\n")
 

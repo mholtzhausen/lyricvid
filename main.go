@@ -630,9 +630,23 @@ func runImagegen(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("no Gemini API key; use --api-key or run 'set-gemini <key>'")
 	}
 
+	folder, stem := audioStem(audioPath)
+
+	// Load per-song config for image-gen settings (lyricvid.yml and <stem>.yml)
+	gc, _, err := loadGenerateConfig([]string{
+		filepath.Join(folder, "lyricvid.yml"),
+		filepath.Join(folder, stem+".yml"),
+	})
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
 	inspirationPath := imagegenInspirationPath
-	if inspirationPath == "" {
-		folder, stem := audioStem(audioPath)
+	if inspirationPath != "" {
+		if err := validateFile(inspirationPath, []string{".lrc", ".txt"}); err != nil {
+			return fmt.Errorf("inspiration: %w", err)
+		}
+	} else {
 		for _, ext := range []string{".lrc", ".txt"} {
 			candidate := filepath.Join(folder, stem+ext)
 			if _, err := os.Stat(candidate); err == nil {
@@ -641,21 +655,22 @@ func runImagegen(_ *cobra.Command, args []string) error {
 				break
 			}
 		}
-		if inspirationPath == "" {
-			return fmt.Errorf("no inspiration file found; provide one with --inspiration")
+	}
+
+	var inspirationText string
+	if inspirationPath != "" {
+		data, err := os.ReadFile(inspirationPath)
+		if err != nil {
+			return fmt.Errorf("reading inspiration file %q: %w", inspirationPath, err)
 		}
+		inspirationText = strings.TrimSpace(string(data))
+	} else if gc.ImagegenInspirationText != "" {
+		inspirationText = strings.TrimSpace(gc.ImagegenInspirationText)
+		fmt.Println("Using inline inspiration text from config.")
 	} else {
-		if err := validateFile(inspirationPath, []string{".lrc", ".txt"}); err != nil {
-			return fmt.Errorf("inspiration: %w", err)
-		}
+		return fmt.Errorf("no inspiration found; provide --inspiration, place a .lrc/.txt alongside the audio, or set imagegen-inspiration in lyricvid.yml")
 	}
 
-	inspirationText, err := os.ReadFile(inspirationPath)
-	if err != nil {
-		return fmt.Errorf("reading inspiration file: %w", err)
-	}
-
-	folder, _ := audioStem(audioPath)
 	outputDir := filepath.Join(folder, "images")
 	if len(args) == 2 {
 		if filepath.IsAbs(args[1]) {
@@ -667,7 +682,7 @@ func runImagegen(_ *cobra.Command, args []string) error {
 
 	return imagegen.Generate(context.Background(), imagegen.Config{
 		APIKey:          cfg.GeminiAPIKey,
-		InspirationText: strings.TrimSpace(string(inspirationText)),
+		InspirationText: inspirationText,
 		Count:           imagegenCount,
 		OutputDir:       outputDir,
 		ImageSize:       preset.ImageSize,
