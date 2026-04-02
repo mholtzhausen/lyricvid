@@ -9,7 +9,10 @@ import (
 	"strconv"
 	"strings"
 
+	"bytes"
+
 	"github.com/spf13/cobra"
+	"github.com/user/lyricvid/internal/ai"
 	"github.com/user/lyricvid/internal/audio"
 	"github.com/user/lyricvid/internal/config"
 	"github.com/user/lyricvid/internal/imagegen"
@@ -55,6 +58,9 @@ var (
 	fadeOutFontColor    string
 
 	fontSizeReference int
+
+	// ai flags
+	aiAPIKey string
 
 	// imagegen flags
 	imagegenInspirationPath string
@@ -138,11 +144,22 @@ It supports LRC (timestamped) and plain text lyrics files.`,
 		RunE:  runCreateConfig,
 	}
 
+	aiCmd := &cobra.Command{
+		Use:   "ai",
+		Short: "Interactive AI assistant for lyricvid (powered by Gemini)",
+		Long:  "Launches a TUI chat session pre-loaded with the full lyricvid help as context.",
+		Args:  cobra.NoArgs,
+		RunE:  runAI,
+	}
+	aiCmd.Flags().StringVar(&aiAPIKey, "api-key", "",
+		"Gemini API key (stored to ~/.lyricvid.yaml if not already saved)")
+
 	rootCmd.AddCommand(generateCmd)
 	rootCmd.AddCommand(setgeminiCmd)
 	rootCmd.AddCommand(imagegenCmd)
 	rootCmd.AddCommand(saveCmd)
 	rootCmd.AddCommand(createConfigCmd)
+	rootCmd.AddCommand(aiCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -748,4 +765,45 @@ func validateFile(path string, allowedExts []string) error {
 		}
 	}
 	return fmt.Errorf("unsupported file extension %q (allowed: %s)", ext, strings.Join(allowedExts, ", "))
+}
+
+func runAI(cmd *cobra.Command, _ []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if aiAPIKey != "" {
+		cfg.GeminiAPIKey = aiAPIKey
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Println("Gemini API key saved to ~/.lyricvid.yaml")
+	}
+	if cfg.GeminiAPIKey == "" {
+		return fmt.Errorf("no Gemini API key; use --api-key or run 'set-gemini <key>'")
+	}
+
+	helpContent := extractHelp(cmd.Root())
+	return ai.Run(context.Background(), cfg.GeminiAPIKey, helpContent)
+}
+
+// extractHelp captures the --help output for every command and returns it
+// as a single string to embed in the AI system prompt.
+func extractHelp(root *cobra.Command) string {
+	var sb strings.Builder
+
+	var capture func(c *cobra.Command)
+	capture = func(c *cobra.Command) {
+		var buf bytes.Buffer
+		c.SetOut(&buf)
+		c.Usage() //nolint:errcheck
+		c.SetOut(os.Stdout)
+		sb.WriteString("\n### " + c.CommandPath() + "\n")
+		sb.WriteString(buf.String())
+		for _, sub := range c.Commands() {
+			capture(sub)
+		}
+	}
+	capture(root)
+	return sb.String()
 }
