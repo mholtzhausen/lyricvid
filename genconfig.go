@@ -380,13 +380,8 @@ func applyConfig(cmd *cobra.Command, gc GenerateConfig) {
 	}
 }
 
-// runCreateConfig writes a fully-commented YAML config template.
-func runCreateConfig(_ *cobra.Command, args []string) error {
-	outPath := filepath.Join(".", "lyricvid.yml")
-	if len(args) > 0 {
-		outPath = args[0]
-	}
-
+// buildConfigTemplate returns the fully-commented YAML config template as a string.
+func buildConfigTemplate() string {
 	var b strings.Builder
 
 	b.WriteString("# lyricvid configuration file\n")
@@ -575,7 +570,16 @@ func runCreateConfig(_ *cobra.Command, args []string) error {
 
 	b.WriteString("\n")
 
-	if err := os.WriteFile(outPath, []byte(b.String()), 0644); err != nil {
+	return b.String()
+}
+
+// runCreateConfig writes a fully-commented YAML config template.
+func runCreateConfig(_ *cobra.Command, args []string) error {
+	outPath := filepath.Join(".", "lyricvid.yml")
+	if len(args) > 0 {
+		outPath = args[0]
+	}
+	if err := os.WriteFile(outPath, []byte(buildConfigTemplate()), 0644); err != nil {
 		return fmt.Errorf("writing config file: %w", err)
 	}
 	fmt.Printf("Config written to %s\n", outPath)

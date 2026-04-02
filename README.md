@@ -1,19 +1,16 @@
 # lyricvid
 
-Generate a music video with synchronized lyrics from an MP3, a lyrics file, and a background image.
+Turn an MP3 into a proper lyrics video — synchronized, animated, and looking like you actually put effort in. Built on FFmpeg, driven by a config file, optionally powered by Google Gemini AI for background image generation.
 
 ## Prerequisites
 
-- **Go 1.22+** for building from source
-- **FFmpeg** and **ffprobe** must be installed and available in your PATH
-  - Install from [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html)
-  - On Ubuntu/Debian: `sudo apt install ffmpeg`
-  - On macOS: `brew install ffmpeg`
-  - On Windows: download from the FFmpeg website
+- **Go 1.22+** to build from source
+- **FFmpeg + ffprobe** in your PATH
+  - Ubuntu/Debian: `sudo apt install ffmpeg`
+  - macOS: `brew install ffmpeg`
+  - Windows: grab it from [ffmpeg.org](https://ffmpeg.org/download.html)
 
 ## Installation
-
-### From source
 
 ```bash
 git clone https://github.com/user/lyricvid.git
@@ -21,110 +18,376 @@ cd lyricvid
 go build -o lyricvid .
 ```
 
-### With go install
+Or if you just want the binary:
 
 ```bash
 go install github.com/user/lyricvid@latest
 ```
 
-## Usage
+---
+
+## The Easiest Way to Get Started
+
+Drop your MP3 in its own folder and `cd` into it. That's your project home — everything else lives alongside it.
 
 ```bash
-lyricvid generate \
-  --audio    song.mp3 \
-  --lyrics   song.lrc \
-  --image    cover.jpg \
-  --output   output.mp4
+mkdir my-song && cp song.mp3 my-song/ && cd my-song
 ```
 
-The `generate` subcommand is also the default, so you can omit it:
+Now run `init` to scaffold the whole project in one go:
 
 ```bash
-lyricvid \
-  --audio song.mp3 \
-  --lyrics song.lrc \
-  --image cover.jpg
+lyricvid init song.mp3
 ```
 
-### Flags
+This creates:
+- `images/` — a folder where you'll put your background images
+- `images.yml` — a pre-filled config file with sensible defaults and fade-in/out already wired up
+- `song.lrc` — an empty LRC lyrics file ready to fill in
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--audio` | *(required)* | Path to audio file (.mp3, .m4a, .flac, .wav) |
-| `--lyrics` | *(required)* | Path to lyrics file (.lrc or .txt) |
-| `--image` | *(required)* | Path to background image (.jpg, .jpeg, .png, .webp) |
-| `--output` | `output.mp4` | Output video file path |
-| `--width` | `1920` | Video width in pixels |
-| `--height` | `1080` | Video height in pixels |
-| `--font-size` | `64` | Base font size for lyrics text |
-| `--font-color` | `#FFFFFF` | Color for context lyric lines |
-| `--highlight-color` | `#FFD700` | Color for the active lyric line |
-| `--bg-dim` | `0.4` | Background dimming (0.0 = fully black, 1.0 = no dimming) |
-| `--lyric-fade` | `0.3` | Seconds to cross-fade between lyric lines; 0 = hard cut |
-| `--lyric-fade-style` | `linear` | Alpha curve for lyric cross-fade: `linear` or `smooth` |
+Then the tool prints step-by-step instructions for what to do next. It's genuinely pretty helpful.
 
-### Example with all options
+You can also give the project a custom name (useful if you're managing multiple videos from one folder):
 
 ```bash
-lyricvid generate \
-  --audio    song.mp3 \
-  --lyrics   song.lrc \
-  --image    cover.jpg \
-  --output   my_video.mp4 \
-  --width    1280 \
-  --height   720 \
-  --font-size 48 \
-  --font-color "#FFFFFF" \
-  --highlight-color "#FF6600" \
-  --bg-dim   0.5
+lyricvid init song.mp3 cinematic
+# creates: cinematic/, cinematic.yml, song.lrc
 ```
 
-## Lyrics File Formats
+Once your LRC is filled in and you've got some images in the folder, render:
 
-### LRC format (timestamped)
+```bash
+lyricvid song.mp3
+```
 
-LRC files contain timestamps for each lyric line, enabling precise synchronization:
+That's it. Output lands at `song.mp4`.
+
+---
+
+## Lyrics Files
+
+### LRC (timestamped) — the good stuff
 
 ```
 [00:12.34] First line of lyrics
-[00:16.00] Second line of lyrics
-[00:20.50] Third line of lyrics
+[00:16.00] Second line
+[00:20.50] Third line
 [02:30.00] Last line
 ```
 
-Timestamps use the format `[mm:ss.xx]` or `[mm:ss.xxx]`. The video will:
-- Display the current lyric line in the highlight color with a larger font
-- Show up to 2 lines before and after as context in a dimmer color
-- Transition between lines at each timestamp
+Each line lights up exactly when the timestamp hits. The active line gets the highlight color and a larger size; the two lines before and after sit in a dimmer context color. Metadata tags like `[ti:Title]` are skipped automatically.
 
-LRC metadata tags (like `[ti:Title]`, `[ar:Artist]`) are automatically skipped.
-
-### Plain text format (no timestamps)
-
-If your lyrics file has no LRC timestamps, simply put each line of lyrics on its own line:
+### Plain text — no timestamps, no problem
 
 ```
 First line of lyrics
-Second line of lyrics
-Third line of lyrics
+Second line
+Third line
 Last line
 ```
 
-The lyrics will be distributed evenly across the audio duration. Each line gets an equal share of the total time.
+lyricvid divides the audio duration evenly between lines. Not as precise, but fine for rough cuts.
 
-## How it works
+---
 
-1. The audio file is analyzed with `ffprobe` to determine its exact duration
-2. The lyrics file is parsed, auto-detecting LRC vs plain text format
-3. An FFmpeg command is built with a complex filtergraph that:
-   - Scales the background image to the target resolution (maintaining aspect ratio)
-   - Dims the background by the specified factor
-   - Overlays `drawtext` filters for each lyric line with time-based enable/disable
-4. FFmpeg encodes the output as H.264 video with AAC audio
-5. Progress is shown in real-time on the terminal
+## All the Commands
 
-## Output format
+### `generate` (or just run the binary directly)
 
-- Video: H.264, CRF 23, medium preset
-- Audio: AAC, 192 kbps
-- Container: MP4
+The main event. Renders your video.
+
+```bash
+lyricvid song.mp3
+lyricvid generate song.mp3
+lyricvid generate song.mp3 --quality 1080p --drift zoom-in,right --fade-in-seconds 4
+```
+
+Picks up `lyricvid.yml` and `<song-stem>.yml` config files from the same directory automatically.
+
+---
+
+### `init`
+
+Scaffold a new project. Covered above — use this first.
+
+```bash
+lyricvid init song.mp3
+lyricvid init song.mp3 my-project-name
+```
+
+---
+
+### `create-config`
+
+Writes a fully-commented YAML template with every single option and its default. Great starting point for a config file if you don't want to use `init`.
+
+```bash
+lyricvid create-config
+lyricvid create-config ./song.yml
+```
+
+---
+
+### `save`
+
+Renders nothing — just saves your CLI flags to a config file. Useful for locking in settings you've been tweaking on the command line.
+
+```bash
+lyricvid save song.mp3 --quality 720p --drift left,zoom-in --bg-dim 0.5
+```
+
+Merges with any existing config file (preserves comments and existing values). Only writes what you explicitly passed.
+
+---
+
+### `image-gen`
+
+Generate background images from your lyrics using Google Gemini. Gives you scene images that actually match the song — or at least something more interesting than a stock photo.
+
+```bash
+lyricvid image-gen song.mp3
+lyricvid image-gen song.mp3 --count 8 --quality 1080p --style "cinematic film noir, high contrast"
+lyricvid image-gen song.mp3 my-images/ --aspect-ratio 16:9
+```
+
+Reads the lyrics file (auto-detected alongside the MP3) for scene inspiration. First time you run it, pass `--api-key` once and it'll be saved for all future runs.
+
+```bash
+lyricvid image-gen song.mp3 --api-key YOUR_GEMINI_API_KEY
+```
+
+---
+
+### `set-gemini`
+
+Store your Gemini API key without running image-gen. Saves it encrypted to `~/.lyricvid.yaml`.
+
+```bash
+lyricvid set-gemini YOUR_GEMINI_API_KEY
+```
+
+---
+
+### `ai`
+
+An interactive chat assistant pre-loaded with the full lyricvid help as context. Useful when you can't remember which flag does what or want to figure out a filtergraph setting.
+
+```bash
+lyricvid ai
+lyricvid ai --api-key YOUR_GEMINI_API_KEY
+```
+
+---
+
+## Config Files
+
+lyricvid looks for YAML config files next to the audio file, in this order:
+
+1. `lyricvid.yml` — applies to every song in the folder
+2. `<audio-stem>.yml` — per-song overrides
+3. `--config <path>` — explicit override from the CLI
+4. CLI flags — always win
+
+Values in later files override earlier ones. CLI flags always take highest priority.
+
+**Example `song.yml`:**
+
+```yaml
+image: images
+quality: 1080p
+aspect-ratio: "16:9"
+
+font-color: "#FFFFFF"
+highlight-color: "#FFD700"
+bg-dim: 0.4
+
+fade-in-seconds: 5
+fade-in-title: "Song Title|Artist Name"
+fade-in-font-size: "80|60"
+fade-in-font-color: "#FFFFFF"
+
+fade-out-seconds: 5
+fade-out-title: "made with lyricvid"
+fade-out-font-color: "#FF0000"
+
+drift: left,right,zoom-in
+drift-easing: cubic
+
+enable-cuda: true
+```
+
+Relative image paths in config files are resolved from the audio file's directory, not wherever you ran the command from.
+
+---
+
+## Flag Reference
+
+### Input / Output
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--lyrics` | auto-detected | Path to `.lrc` or `.txt` lyrics file; auto-detected from audio directory if omitted |
+| `--image` | auto-detected | Path to background image or folder; looks in `<audio-dir>/images/` by default |
+| `--output` | `<stem>.mp4` | Output path; defaults to same folder and name as the audio file |
+| `--config` | — | Path to a YAML config file; overrides auto-detected `lyricvid.yml` / `<stem>.yml` |
+
+### Quality & Dimensions
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--quality` | — | Preset: `480p`, `720p`, `1080p`, `1440p`; overrides `--width`/`--height` |
+| `--aspect-ratio` | `16:9` | Used with `--quality` to compute final dimensions (e.g. `4:3`, `21:9`, `1:1`) |
+| `--width` | `1920` | Video width in pixels (ignored when `--quality` is set) |
+| `--height` | `1080` | Video height in pixels (ignored when `--quality` is set) |
+
+### Typography
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--font-size` | auto-scaled | Base font size; auto-scales proportionally to width if not set |
+| `--font-size-reference` | `38` | Font size (pt) at the 1920px reference width, used for auto-scaling |
+| `--font-color` | `#FFFFFF` | Color for context lyric lines |
+| `--highlight-color` | `#FFD700` | Color for the active lyric line |
+
+Colors accept hex (`#FF6600`) or FFmpeg named colors (`white`, `yellow`, etc).
+
+### Background & Transitions
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--bg-dim` | `0.4` | Background dimming (0.0 = pure black, 1.0 = original image, no dimming) |
+| `--transition` | `fade` | Transition effect between images; see below for options |
+| `--transition-duration` | `3.0` | Duration of transition in seconds |
+
+**Transition types:** `fade`, `fadeblack`, `fadewhite`, `dissolve`, `wipeleft`, `wiperight`, `wipeup`, `wipedown`, `slideleft`, `slideright`, `radial`, `pixelize`, `none`
+
+### Lyric Positioning & Timing
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--lyric-position` | `0.65` | Vertical position of the active line (0.0 = top, 1.0 = bottom) |
+| `--lyric-fade` | `0.3` | Cross-fade duration in seconds between lyric lines; `0` = hard cut |
+| `--lyric-fade-style` | `linear` | Fade curve: `linear` or `smooth` |
+
+### Fade-In
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--fade-in-seconds` | `0` | Seconds to fade in from black at the start |
+| `--fade-in-title` | — | Title text during fade-in; use `\|` to separate lines (`"Song Title\|Artist"`) |
+| `--fade-in-title-fade-out` | `1.0` | Seconds to fade the title out after the fade-in ends |
+| `--fade-in-font-size` | `60` | Font size(s) for the fade-in title; use `\|` for per-line sizes (`"80\|60"`) |
+| `--fade-in-font-color` | font-color | Color(s) for the fade-in title; use `\|` for per-line colors |
+
+### Fade-Out
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--fade-out-seconds` | `0` | Seconds to fade to black at the end |
+| `--fade-out-title` | — | Title text during fade-out; use `\|` for multiple lines |
+| `--fade-out-title-fade-out` | `1.0` | Seconds to fade in the title before the fade-out begins |
+| `--fade-out-font-size` | `60` | Font size(s) for the fade-out title |
+| `--fade-out-font-color` | font-color | Color(s) for the fade-out title |
+
+**Example with multi-line title and per-line colors:**
+
+```bash
+lyricvid song.mp3 \
+  --fade-in-seconds 6 \
+  --fade-in-title "My Song|By Some Band" \
+  --fade-in-font-size "80|50" \
+  --fade-in-font-color "#FFD700|#FFFFFF"
+```
+
+### Drift Animation
+
+Slowly pans or zooms the background image while it's on screen. Subtle, but it makes a static image feel alive.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--drift` | disabled | Comma-separated motion types: `left`, `right`, `up`, `down`, `zoom-in`, `zoom-out`, `random` |
+| `--drift-max` | `60` | Maximum drift distance in pixels |
+| `--drift-min` | `10` | Minimum drift distance in pixels |
+| `--drift-duration-percentage` | `90` | % of each image's display time used for animation (holds at final position after) |
+| `--drift-easing` | `quad` | Easing curve: `linear`, `quad`, `cubic`, `smooth` |
+
+```bash
+# Gentle zoom in with a slow horizontal drift
+lyricvid song.mp3 --drift zoom-in,right --drift-easing cubic --drift-max 40
+
+# Unpredictable, lively
+lyricvid song.mp3 --drift random
+```
+
+### Hardware Acceleration
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--enable-cuda` | `true` | Use CUDA/NVENC if available; automatically falls back to libx264 if not |
+
+### `image-gen` Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--inspiration` | auto-detected | Path to lyrics/text file for scene inspiration |
+| `--count` | `5` | Number of images to generate |
+| `--api-key` | — | Gemini API key (saved on first use) |
+| `--quality` | `480p` | Image size preset: `480p`, `720p`, `1080p`, `1440p` |
+| `--style` | — | Visual style applied to every image (e.g. `"oil painting, warm tones"`) |
+| `--aspect-ratio` | `16:9` | Image aspect ratio passed to Gemini |
+
+---
+
+## How it Works Under the Hood
+
+1. `ffprobe` reads the audio file to get its exact duration
+2. The lyrics file is parsed (LRC vs plain text is auto-detected)
+3. A complex FFmpeg filtergraph is assembled:
+   - Background image is scaled, padded, and dimmed via `colorchannelmixer`
+   - Each lyric line gets a set of `drawtext` filters: the active line at center in highlight color, plus up to 4 context lines at reduced opacity (±1 at 70%, ±2 at 40%)
+   - All `drawtext` filters use `enable='between(t,start,end)'` for precise timing
+   - Drift animation is applied via `zoompan` per image segment
+   - Fade-in/out and title overlays are composed on top
+4. FFmpeg encodes H.264 video + AAC audio, with real-time progress in your terminal
+
+**Output format:** H.264, CRF 23, medium preset · AAC 192 kbps · MP4
+
+---
+
+## Example: Full Kitchen Sink
+
+```bash
+lyricvid generate song.mp3 \
+  --lyrics song.lrc \
+  --image images/ \
+  --output my-video.mp4 \
+  --quality 1080p \
+  --aspect-ratio 16:9 \
+  --font-color "#FFFFFF" \
+  --highlight-color "#FF6600" \
+  --bg-dim 0.5 \
+  --lyric-position 0.7 \
+  --lyric-fade 0.4 \
+  --lyric-fade-style smooth \
+  --transition dissolve \
+  --transition-duration 2.5 \
+  --drift zoom-in,left \
+  --drift-easing cubic \
+  --drift-max 50 \
+  --fade-in-seconds 5 \
+  --fade-in-title "My Song|The Artist" \
+  --fade-in-font-size "80|55" \
+  --fade-in-font-color "#FFD700|#FFFFFF" \
+  --fade-out-seconds 4 \
+  --fade-out-title "thanks for listening"
+```
+
+---
+
+## Supported Formats
+
+| Type | Extensions |
+|------|-----------|
+| Audio | `.mp3` `.m4a` `.flac` `.wav` |
+| Lyrics | `.lrc` `.txt` |
+| Images | `.jpg` `.jpeg` `.png` `.webp` |
