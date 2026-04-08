@@ -105,12 +105,22 @@ func generateStoryArc(ctx context.Context, client *genai.Client, cfg Config) ([]
 		return nil, "", fmt.Errorf("rendering story arc prompt: %w", err)
 	}
 
+	systemInstruction, err := loadSystemInstruction("story_arc_system.txt", map[string]any{
+		"Count":           cfg.Count,
+		"InspirationText": cfg.InspirationText,
+		"Style":           cfg.Style,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+
 	result, err := client.Models.GenerateContent(ctx, modelText,
 		[]*genai.Content{{
 			Role:  "user",
 			Parts: []*genai.Part{{Text: prompt}},
 		}},
 		&genai.GenerateContentConfig{
+			SystemInstruction: systemInstruction,
 			ResponseModalities: []string{"TEXT"},
 		},
 	)
@@ -138,12 +148,21 @@ func generateImage(ctx context.Context, client *genai.Client, cfg Config, scene 
 		return nil, "", "", fmt.Errorf("rendering image prompt: %w", err)
 	}
 
+	systemInstruction, err := loadSystemInstruction("story_arc_system.txt", map[string]any{
+		"Scene": scene,
+		"Style": cfg.Style,
+	})
+	if err != nil {
+		return nil, "", "", err
+	}
+
 	result, err := client.Models.GenerateContent(ctx, modelImage,
 		[]*genai.Content{{
 			Role:  "user",
 			Parts: []*genai.Part{{Text: prompt}},
 		}},
 		&genai.GenerateContentConfig{
+			SystemInstruction: systemInstruction,
 			ResponseModalities: []string{"IMAGE"},
 			ThinkingConfig: &genai.ThinkingConfig{
 				ThinkingLevel: genai.ThinkingLevelMinimal,
@@ -173,7 +192,7 @@ var sceneLineRe = regexp.MustCompile(`^\d+\.\s+(.+)$`)
 
 func parseScenes(text string, count int) ([]string, error) {
 	var scenes []string
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimSpace(line)
 		if m := sceneLineRe.FindStringSubmatch(line); m != nil {
 			scenes = append(scenes, m[1])
@@ -183,6 +202,17 @@ func parseScenes(text string, count int) ([]string, error) {
 		return nil, fmt.Errorf("story arc yielded only %d/%d scenes; raw response: %q", len(scenes), count, text)
 	}
 	return scenes[:count], nil
+}
+
+func loadSystemInstruction(name string, data any) (*genai.Content, error) {
+	text, err := renderPrompt(name, data)
+	if err != nil {
+		return nil, fmt.Errorf("rendering system prompt: %w", err)
+	}
+	return &genai.Content{
+		Role:  "system",
+		Parts: []*genai.Part{{Text: strings.TrimSpace(text)}},
+	}, nil
 }
 
 func renderPrompt(name string, data any) (string, error) {

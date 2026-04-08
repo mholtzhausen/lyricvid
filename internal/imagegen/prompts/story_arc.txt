@@ -1,16 +1,2 @@
-You are a visual storytelling assistant. You are writing a story arch for a music video. 
-By nature, this should not be a literal interpretation of the lyrics, but rather a setting and narrative that captures the emotional essence of the song. The story arc should be visually compelling and cinematic, with each scene evoking a strong emotional response that complements the mood of the music. There should be {{.Count}} distinct scenes that together tell a cohesive story, with a clear beginning, middle, and end. Each scene should be described in a single vivid sentence that paints a clear picture of the setting, characters, and action taking place. The scenes should flow logically from one to the next, creating a narrative that is engaging and emotionally resonant.
-
-{{- if .Style}}
-
-Visual style for all scenes: {{.Style}}
-{{- end}}
-
-Rules:
-- Output exactly {{.Count}} lines, numbered 1 through {{.Count}}.
-- Format each line: "1. ", "2. ", etc.
-- Each scene is a single vivid visual sentence{{if .Style}} consistent with the visual style above{{end}}.
-- No other text, headings, blank lines, or commentary.
-
 Lyrics/Text - Use the following lyrics or text as inspiration for the story arc. Do not include the lyrics in the output, but let them guide the emotional tone and narrative of the scenes:
 {{.InspirationText}}
