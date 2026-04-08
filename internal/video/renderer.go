@@ -52,6 +52,8 @@ type Config struct {
 	DriftDurationPct float64  // percentage of image duration to animate (0–100)
 	DriftEasing      string   // easing curve: linear, quad (default), cubic, smooth
 
+	MaxLength  float64 // 0 = no limit; positive = truncate output at this many seconds
+
 	EnableCUDA bool // use h264_nvenc encoder when true
 
 	VisualizerType     string  // "waveform", "spectrum", "freqs", or "" / "none" to disable
@@ -90,11 +92,11 @@ func Render(cfg Config) error {
 	} else {
 		args = append(args, "-c:v", "libx264", "-preset", "medium", "-crf", "23")
 	}
-	args = append(args,
-		"-c:a", "aac", "-b:a", "192k",
-		"-shortest",
-		cfg.OutputPath,
-	)
+	args = append(args, "-c:a", "aac", "-b:a", "192k", "-shortest")
+	if cfg.MaxLength > 0 {
+		args = append(args, "-t", fmt.Sprintf("%.6f", cfg.MaxLength))
+	}
+	args = append(args, cfg.OutputPath)
 
 	cmd := exec.Command("ffmpeg", args...)
 
@@ -275,16 +277,26 @@ func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 	}
 
 	// 6. Audio visualizer overlay
-	visFilter, err := buildVisualizerFilter(cfg, len(cfg.ImagePaths))
+	// When CUDA encoding is active, explicitly upload the finished CPU frame to
+	// CUDA VRAM before h264_nvenc touches it. This lets the encoder read directly
+	// from device memory instead of doing an internal pinned-memory copy.
+	finalLabel := "out"
+	hwuploadStep := ""
+	if cfg.EnableCUDA {
+		finalLabel = "pre_enc"
+		hwuploadStep = ";\n[pre_enc]format=yuv420p,hwupload_cuda[out]"
+	}
+
+	visFilter, err := buildVisualizerFilter(cfg, len(cfg.ImagePaths), finalLabel)
 	if err != nil {
 		return "", err
 	}
 
 	var drawtextSection string
 	if visFilter != "" {
-		drawtextSection = "[bg]\n" + strings.Join(chain, ",\n") + "\n[pre_vis];\n" + visFilter
+		drawtextSection = "[bg]\n" + strings.Join(chain, ",\n") + "\n[pre_vis];\n" + visFilter + hwuploadStep
 	} else {
-		drawtextSection = "[bg]\n" + strings.Join(chain, ",\n") + "\n[out]"
+		drawtextSection = "[bg]\n" + strings.Join(chain, ",\n") + "\n[" + finalLabel + "]" + hwuploadStep
 	}
 	return bgSource + ";\n" + drawtextSection, nil
 }
@@ -292,7 +304,8 @@ func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 // buildVisualizerFilter returns the FFmpeg filter fragment for the audio visualizer overlay,
 // or an empty string if the visualizer is disabled.
 // audioIdx is the FFmpeg input index of the audio stream (= number of image inputs).
-func buildVisualizerFilter(cfg Config, audioIdx int) (string, error) {
+// outputLabel is the filtergraph label to assign the final output stream (without brackets).
+func buildVisualizerFilter(cfg Config, audioIdx int, outputLabel string) (string, error) {
 	if cfg.VisualizerType == "" || cfg.VisualizerType == "none" {
 		return "", nil
 	}
@@ -384,8 +397,8 @@ func buildVisualizerFilter(cfg Config, audioIdx int) (string, error) {
 	}
 
 	overlayChain := fmt.Sprintf(
-		"[pre_vis][%s]overlay=x=0:y=%s:format=auto:enable='between(t,%.3f,%.3f)'[out]",
-		visLabel, yExpr, visStart, visEnd,
+		"[pre_vis][%s]overlay=x=0:y=%s:format=auto:enable='between(t,%.3f,%.3f)'[%s]",
+		visLabel, yExpr, visStart, visEnd, outputLabel,
 	)
 
 	parts := []string{vizChain, alphaChain}

@@ -48,13 +48,13 @@ func CheckFFmpeg() error {
 	return nil
 }
 
-// CheckCUDA probes FFmpeg for CUDA hardware acceleration support.
-// Returns true if CUDA is listed as an available hwaccel method.
+// CheckCUDA probes FFmpeg for h264_nvenc encoder availability.
+// Returns true only if h264_nvenc is listed as an available encoder.
 func CheckCUDA() bool {
-	cmd := exec.Command("ffmpeg", "-hwaccels")
+	cmd := exec.Command("ffmpeg", "-encoders")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(out), "cuda")
+	return strings.Contains(string(out), "h264_nvenc")
 }

@@ -78,6 +78,9 @@ var (
 	driftDurationPct float64
 	driftEasing      string
 
+	// output length
+	maxLength float64
+
 	// hardware acceleration
 	enableCUDA bool
 
@@ -235,6 +238,8 @@ func addFlags(cmd *cobra.Command) {
 	cmd.Flags().IntVar(&driftMin, "drift-min", 10, "Minimum drift in pixels")
 	cmd.Flags().Float64Var(&driftDurationPct, "drift-duration-percentage", 90, "Percentage of image display time used for the drift animation (1–100); image holds at final position afterward")
 	cmd.Flags().StringVar(&driftEasing, "drift-easing", "quad", "Easing curve for drift animation: linear, quad (default), cubic, smooth")
+
+	cmd.Flags().Float64Var(&maxLength, "max-length", 0, "Truncate output video at this duration in seconds; 0 = no limit")
 
 	cmd.Flags().BoolVar(&enableCUDA, "enable-cuda", true, "Use CUDA hardware acceleration (h264_nvenc encoder); probes availability on each run, falls back to libx264 if unavailable")
 
@@ -503,6 +508,22 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		lyricsDesc = "none"
 	}
 
+	// Apply max-length: clamp duration and trim lyrics
+	if maxLength > 0 && maxLength < duration {
+		duration = maxLength
+		trimmed := lines[:0]
+		for _, l := range lines {
+			if l.StartTime >= maxLength {
+				break
+			}
+			if l.EndTime > maxLength {
+				l.EndTime = maxLength
+			}
+			trimmed = append(trimmed, l)
+		}
+		lines = trimmed
+	}
+
 	// Images description
 	var imagesDesc string
 	switch len(imagePaths) {
@@ -663,6 +684,8 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		DriftMax:         driftMax,
 		DriftDurationPct: driftDurationPct,
 		DriftEasing:      driftEasing,
+
+		MaxLength:  maxLength,
 
 		EnableCUDA: cudaAvailable,
 
