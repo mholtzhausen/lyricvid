@@ -49,6 +49,8 @@ type GenerateConfig struct {
 	DriftEasing         string  `yaml:"drift-easing,omitempty"`
 	EnableCUDA          string  `yaml:"enable-cuda,omitempty"` // "true" or "false"; empty = not configured
 
+	Framerate           int     `yaml:"framerate,omitempty"`
+
 	// audio visualizer settings
 	VisualizerType     string  `yaml:"visualizer-type,omitempty"`
 	VisualizerColor    string  `yaml:"visualizer-color,omitempty"`
@@ -187,6 +189,9 @@ func loadGenerateConfig(paths []string) (GenerateConfig, []string, error) {
 		if tmp.EnableCUDA != "" {
 			acc.EnableCUDA = tmp.EnableCUDA
 		}
+		if tmp.Framerate != 0 {
+			acc.Framerate = tmp.Framerate
+		}
 		if tmp.VisualizerType != "" {
 			acc.VisualizerType = tmp.VisualizerType
 		}
@@ -249,6 +254,7 @@ func saveGenerateConfig(cmd *cobra.Command, path string) error {
 		"fade-out-font-size", "fade-out-font-color",
 		"drift", "drift-max", "drift-min", "drift-duration-percentage", "drift-easing",
 		"enable-cuda",
+		"framerate",
 		"visualizer-type", "visualizer-color", "visualizer-height",
 		"visualizer-position", "visualizer-opacity", "visualizer-mode", "visualizer-scale", "visualizer-slide",
 		"visualizer-start", "visualizer-end", "visualizer-fade",
@@ -431,6 +437,9 @@ func applyConfig(cmd *cobra.Command, gc GenerateConfig) {
 	}
 	if gc.EnableCUDA != "" && !cmd.Flags().Changed("enable-cuda") {
 		enableCUDA = gc.EnableCUDA == "true"
+	}
+	if gc.Framerate != 0 && !cmd.Flags().Changed("framerate") {
+		framerate = gc.Framerate
 	}
 	if gc.VisualizerType != "" && !cmd.Flags().Changed("visualizer-type") {
 		visualizerType = gc.VisualizerType
@@ -672,6 +681,9 @@ func buildConfigTemplate(gc GenerateConfig) string {
 
 	v, c = rStr(gc.EnableCUDA, `"true"`, false)
 	wf(&b, c, "Enable CUDA hardware acceleration for encoding (h264_nvenc).\nWhen true, CUDA availability is probed on each run; falls back to libx264 if not found.\nSet to false to always use CPU encoding (libx264).\nValid values: true, false", "enable-cuda", v)
+
+	v, c = rInt(gc.Framerate, "0", true)
+	wf(&b, c, "Output frame rate in fps. Set to 0 to use FFmpeg's default.", "framerate", v)
 
 	// --- Image Generation ---
 	b.WriteString("\n\n# --- Image Generation ---\n")

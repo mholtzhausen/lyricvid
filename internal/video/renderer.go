@@ -67,6 +67,8 @@ type Config struct {
 	VisualizerStart    float64 // seconds from start when visualizer appears; negative = use default (10s)
 	VisualizerEnd      float64 // seconds from start when visualizer disappears; negative = Duration-10
 	VisualizerFade     float64 // seconds to fade in/out; 0 = instant
+
+	Framerate int // output frame rate (fps); 0 = FFmpeg default
 }
 
 // Render builds and executes the FFmpeg command to produce the video.
@@ -91,6 +93,9 @@ func Render(cfg Config) error {
 		args = append(args, "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23", "-b:v", "0")
 	} else {
 		args = append(args, "-c:v", "libx264", "-preset", "medium", "-crf", "23")
+	}
+	if cfg.Framerate > 0 {
+		args = append(args, "-r", strconv.Itoa(cfg.Framerate))
 	}
 	args = append(args, "-c:a", "aac", "-b:a", "192k", "-shortest")
 	if cfg.MaxLength > 0 {
@@ -473,11 +478,15 @@ func buildTitleDrawtexts(fontPath string, lines []string, fontSizes []int, color
 }
 
 func buildBgSource(cfg Config, w, h int, dim float64) (string, error) {
+	fps := cfg.Framerate
+	if fps <= 0 {
+		fps = 25
+	}
 	switch len(cfg.ImagePaths) {
 	case 0:
 		return fmt.Sprintf(
-			"color=c=black:s=%dx%d:r=25,format=yuv420p,colorchannelmixer=rr=%.2f:gg=%.2f:bb=%.2f[bg]",
-			w, h, dim, dim, dim,
+			"color=c=black:s=%dx%d:r=%d,format=yuv420p,colorchannelmixer=rr=%.2f:gg=%.2f:bb=%.2f[bg]",
+			w, h, fps, dim, dim, dim,
 		), nil
 	case 1:
 		if len(cfg.DriftTypes) == 0 {

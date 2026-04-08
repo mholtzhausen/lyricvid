@@ -84,6 +84,9 @@ var (
 	// hardware acceleration
 	enableCUDA bool
 
+	// framerate
+	framerate int
+
 	// audio visualizer
 	visualizerType     string
 	visualizerColor    string
@@ -242,6 +245,8 @@ func addFlags(cmd *cobra.Command) {
 	cmd.Flags().Float64Var(&maxLength, "max-length", 0, "Truncate output video at this duration in seconds; 0 = no limit")
 
 	cmd.Flags().BoolVar(&enableCUDA, "enable-cuda", true, "Use CUDA hardware acceleration (h264_nvenc encoder); probes availability on each run, falls back to libx264 if unavailable")
+
+	cmd.Flags().IntVar(&framerate, "framerate", 0, "Output frame rate (fps); 0 = FFmpeg default")
 
 	cmd.Flags().StringVar(&visualizerType, "visualizer-type", "none", "Audio visualizer overlay: none, waveform, spectrum, freqs")
 	cmd.Flags().StringVar(&visualizerColor, "visualizer-color", "white", "Color for the audio visualizer (hex or FFmpeg named color)")
@@ -601,6 +606,11 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	} else {
 		p("cuda", "disabled  (libx264)")
 	}
+	if framerate > 0 {
+		p("framerate", fmt.Sprintf("%d fps", framerate))
+	} else {
+		p("framerate", "default")
+	}
 	if visualizerType != "none" {
 		effectiveVisEnd := visualizerEnd
 		if effectiveVisEnd < 0 {
@@ -700,6 +710,8 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		VisualizerStart:    visualizerStart,
 		VisualizerEnd:      visualizerEnd,
 		VisualizerFade:     visualizerFade,
+
+		Framerate: framerate,
 	}
 
 	return video.Render(cfg)

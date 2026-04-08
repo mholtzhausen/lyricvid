@@ -222,6 +222,7 @@ visualizer-position: bottom
 visualizer-opacity: 0.8
 
 enable-cuda: true
+framerate: 30
 ```
 
 Relative image paths in config files are resolved from the audio file's directory, not wherever you ran the command from.
@@ -362,6 +363,12 @@ lyricvid song.mp3 --visualizer-type freqs --visualizer-height 0.25 --visualizer-
 |------|---------|-------------|
 | `--enable-cuda` | `true` | Use CUDA/NVENC if available; automatically falls back to libx264 if not |
 
+### Output
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--framerate` | `0` (FFmpeg default) | Output frame rate in fps; `0` lets FFmpeg choose its default |
+
 ### `image-gen` Flags
 
 | Flag | Default | Description |
@@ -422,7 +429,8 @@ lyricvid generate song.mp3 \
   --visualizer-color "#FFD700" \
   --visualizer-mode cline \
   --visualizer-height 0.12 \
-  --visualizer-opacity 0.75
+  --visualizer-opacity 0.75 \
+  --framerate 30
 ```
 
 ---

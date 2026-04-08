@@ -35,6 +35,7 @@ All orchestration lives in `main.go` (CLI setup, flag parsing, input validation,
 **Key types**:
 - `lyrics.Line{StartTime, EndTime float64; Text string}` — the unit passed from lyrics → video
 - `video.Config` — flat struct holding all rendering parameters plus `[]lyrics.Line`
+  - `Framerate int` — output frame rate (fps); 0 means FFmpeg default (currently 25 for the `color` source). When set, `-r <fps>` is passed to FFmpeg and the `color` source rate is set accordingly.
 
 **Filtergraph structure** (`internal/video/renderer.go:buildFilterComplex`):
 - Base chain: scale → pad → format=yuv420p → `colorchannelmixer` (for bg dim) → `[bg]`
