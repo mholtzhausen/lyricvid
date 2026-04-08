@@ -117,14 +117,16 @@ lyricvid init song.mp3 my-project-name
 
 ---
 
-### `create-config`
+### `config-file`
 
 Writes a fully-commented YAML template with every single option and its default. Great starting point for a config file if you don't want to use `init`.
 
 ```bash
-lyricvid create-config
-lyricvid create-config ./song.yml
+lyricvid config-file
+lyricvid config-file ./song.yml
 ```
+
+If the file already exists, the command reads it first and carries all current values over into the fresh template — keeping your settings while picking up any new fields or updated comments added in later versions of lyricvid.
 
 ---
 
@@ -212,6 +214,12 @@ fade-out-font-color: "#FF0000"
 
 drift: left,right,zoom-in
 drift-easing: cubic
+
+visualizer-type: waveform
+visualizer-color: "#FFD700"
+visualizer-height: 0.15
+visualizer-position: bottom
+visualizer-opacity: 0.8
 
 enable-cuda: true
 ```
@@ -319,6 +327,35 @@ lyricvid song.mp3 --drift zoom-in,right --drift-easing cubic --drift-max 40
 lyricvid song.mp3 --drift random
 ```
 
+### Audio Visualizer
+
+Overlays a real-time audio visualization on the video — waveform, spectrum, or frequency bars.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--visualizer-type` | `none` | Visualizer type: `waveform`, `spectrum`, `freqs`, or `none` to disable |
+| `--visualizer-color` | `white` | Color of the visualizer; hex or FFmpeg named color |
+| `--visualizer-height` | `0.15` | Height as a fraction of video height (e.g. `0.15` = bottom 15%) |
+| `--visualizer-position` | `bottom` | Placement: `top` or `bottom` |
+| `--visualizer-opacity` | `0.8` | Overlay opacity (0.0 = invisible, 1.0 = fully opaque) |
+| `--visualizer-mode` | `line` | Waveform drawing mode (only applies to `waveform`): `line`, `point`, `p2p`, `cline` |
+
+**Visualizer types:**
+- `waveform` — animated amplitude waveform; `--visualizer-mode` controls the drawing style
+- `spectrum` — scrolling frequency spectrogram; colors map to audio channels
+- `freqs` — real-time frequency bar graph
+
+```bash
+# Subtle waveform at the bottom
+lyricvid song.mp3 --visualizer-type waveform --visualizer-color "#FFD700"
+
+# Full-width spectrum, top of frame, semi-transparent
+lyricvid song.mp3 --visualizer-type spectrum --visualizer-position top --visualizer-opacity 0.6
+
+# Taller frequency bars covering the bottom quarter
+lyricvid song.mp3 --visualizer-type freqs --visualizer-height 0.25 --visualizer-color cyan
+```
+
 ### Hardware Acceleration
 
 | Flag | Default | Description |
@@ -348,6 +385,7 @@ lyricvid song.mp3 --drift random
    - All `drawtext` filters use `enable='between(t,start,end)'` for precise timing
    - Drift animation is applied via `zoompan` per image segment
    - Fade-in/out and title overlays are composed on top
+   - If a visualizer is enabled, the audio stream is routed through `showwaves`, `showspectrum`, or `showfreqs`; the black background is keyed out and the result is composited over the video at the chosen position and opacity
 4. FFmpeg encodes H.264 video + AAC audio, with real-time progress in your terminal
 
 **Output format:** H.264, CRF 23, medium preset · AAC 192 kbps · MP4
@@ -379,7 +417,12 @@ lyricvid generate song.mp3 \
   --fade-in-font-size "80|55" \
   --fade-in-font-color "#FFD700|#FFFFFF" \
   --fade-out-seconds 4 \
-  --fade-out-title "thanks for listening"
+  --fade-out-title "thanks for listening" \
+  --visualizer-type waveform \
+  --visualizer-color "#FFD700" \
+  --visualizer-mode cline \
+  --visualizer-height 0.12 \
+  --visualizer-opacity 0.75
 ```
 
 ---

@@ -292,8 +292,40 @@ func Run(ctx context.Context, apiKey, helpContent string) error {
 	m := newModel(client, systemPrompt)
 
 	prog := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	_, err = prog.Run()
-	return err
+	finalModel, err := prog.Run()
+	if err != nil {
+		return err
+	}
+	if fm, ok := finalModel.(model); ok {
+		printConversation(fm.messages)
+	}
+	return nil
+}
+
+func printConversation(messages []chatMessage) {
+	if len(messages) == 0 {
+		return
+	}
+	sep := sepStyle.Render(strings.Repeat("─", 60))
+	fmt.Println(sep)
+	for _, msg := range messages {
+		switch msg.role {
+		case "user":
+			fmt.Println(userLabelStyle.Render("You"))
+			for _, line := range strings.Split(msg.text, "\n") {
+				fmt.Println(userTextStyle.Render("  " + line))
+			}
+		case "assistant":
+			fmt.Println(aiLabelStyle.Render("lyricvid AI"))
+			for _, line := range strings.Split(msg.text, "\n") {
+				fmt.Println(aiTextStyle.Render("  " + line))
+			}
+		case "error":
+			fmt.Println(errStyle.Render("  ✖  " + msg.text))
+		}
+		fmt.Println()
+	}
+	fmt.Println(sep)
 }
 
 func buildSystemPrompt(helpContent string) string {

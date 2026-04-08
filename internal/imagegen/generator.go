@@ -63,10 +63,11 @@ func Generate(ctx context.Context, cfg Config) error {
 	}
 
 	fmt.Printf("Generating story arc for %d scenes...\n", cfg.Count)
-	scenes, err := generateStoryArc(ctx, client, cfg)
+	scenes, arcPrompt, err := generateStoryArc(ctx, client, cfg)
 	if err != nil {
 		return fmt.Errorf("generating story arc: %w", err)
 	}
+	fmt.Printf("Story arc prompt:\n%s\n\n", arcPrompt)
 
 	for i, scene := range scenes {
 		label := scene
@@ -75,10 +76,11 @@ func Generate(ctx context.Context, cfg Config) error {
 		}
 		fmt.Printf("Generating image %d/%d: %s\n", i+1, cfg.Count, label)
 
-		data, mimeType, err := generateImage(ctx, client, cfg, scene)
+		data, mimeType, imagePrompt, err := generateImage(ctx, client, cfg, scene)
 		if err != nil {
 			return fmt.Errorf("scene %d: %w", i+1, err)
 		}
+		fmt.Printf("Image prompt:\n%s\n\n", imagePrompt)
 
 		ext := mimeToExt(mimeType)
 		filename := fmt.Sprintf("image_%03d%s", i+1, ext)
@@ -93,14 +95,14 @@ func Generate(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-func generateStoryArc(ctx context.Context, client *genai.Client, cfg Config) ([]string, error) {
+func generateStoryArc(ctx context.Context, client *genai.Client, cfg Config) ([]string, string, error) {
 	prompt, err := renderPrompt("story_arc.txt", map[string]any{
 		"Count":           cfg.Count,
 		"InspirationText": cfg.InspirationText,
 		"Style":           cfg.Style,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("rendering story arc prompt: %w", err)
+		return nil, "", fmt.Errorf("rendering story arc prompt: %w", err)
 	}
 
 	result, err := client.Models.GenerateContent(ctx, modelText,
@@ -113,27 +115,27 @@ func generateStoryArc(ctx context.Context, client *genai.Client, cfg Config) ([]
 		},
 	)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if len(result.Candidates) == 0 {
-		return nil, fmt.Errorf("no candidates in story arc response")
+		return nil, "", fmt.Errorf("no candidates in story arc response")
 	}
 
 	raw := result.Text()
 	scenes, err := parseScenes(raw, cfg.Count)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return scenes, nil
+	return scenes, prompt, nil
 }
 
-func generateImage(ctx context.Context, client *genai.Client, cfg Config, scene string) ([]byte, string, error) {
+func generateImage(ctx context.Context, client *genai.Client, cfg Config, scene string) ([]byte, string, string, error) {
 	prompt, err := renderPrompt("image_scene.txt", map[string]any{
 		"Scene": scene,
 		"Style": cfg.Style,
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("rendering image prompt: %w", err)
+		return nil, "", "", fmt.Errorf("rendering image prompt: %w", err)
 	}
 
 	result, err := client.Models.GenerateContent(ctx, modelImage,
@@ -153,18 +155,18 @@ func generateImage(ctx context.Context, client *genai.Client, cfg Config, scene 
 		},
 	)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	if len(result.Candidates) == 0 {
-		return nil, "", fmt.Errorf("no candidates in image response")
+		return nil, "", "", fmt.Errorf("no candidates in image response")
 	}
 
 	for _, part := range result.Candidates[0].Content.Parts {
 		if part.InlineData != nil {
-			return part.InlineData.Data, part.InlineData.MIMEType, nil
+			return part.InlineData.Data, part.InlineData.MIMEType, prompt, nil
 		}
 	}
-	return nil, "", fmt.Errorf("no image data in response")
+	return nil, "", "", fmt.Errorf("no image data in response")
 }
 
 var sceneLineRe = regexp.MustCompile(`^\d+\.\s+(.+)$`)

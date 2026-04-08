@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -48,8 +49,22 @@ type GenerateConfig struct {
 	DriftEasing         string  `yaml:"drift-easing,omitempty"`
 	EnableCUDA          string  `yaml:"enable-cuda,omitempty"` // "true" or "false"; empty = not configured
 
+	// audio visualizer settings
+	VisualizerType     string  `yaml:"visualizer-type,omitempty"`
+	VisualizerColor    string  `yaml:"visualizer-color,omitempty"`
+	VisualizerHeight   float64 `yaml:"visualizer-height,omitempty"`
+	VisualizerPosition string  `yaml:"visualizer-position,omitempty"`
+	VisualizerOpacity  float64 `yaml:"visualizer-opacity,omitempty"`
+	VisualizerMode     string  `yaml:"visualizer-mode,omitempty"`
+	VisualizerScale    string  `yaml:"visualizer-scale,omitempty"`
+	VisualizerSlide    string  `yaml:"visualizer-slide,omitempty"`
+	VisualizerStart    float64 `yaml:"visualizer-start,omitempty"`
+	VisualizerEnd      float64 `yaml:"visualizer-end,omitempty"`
+	VisualizerFade     float64 `yaml:"visualizer-fade,omitempty"`
+
 	// image-gen settings
 	ImagegenInspirationText string `yaml:"imagegen-inspiration,omitempty"`
+	ImagegenStyle           string `yaml:"imagegen-style,omitempty"`
 }
 
 // loadGenerateConfig loads and merges one or more YAML config files in order.
@@ -172,8 +187,44 @@ func loadGenerateConfig(paths []string) (GenerateConfig, []string, error) {
 		if tmp.EnableCUDA != "" {
 			acc.EnableCUDA = tmp.EnableCUDA
 		}
+		if tmp.VisualizerType != "" {
+			acc.VisualizerType = tmp.VisualizerType
+		}
+		if tmp.VisualizerColor != "" {
+			acc.VisualizerColor = tmp.VisualizerColor
+		}
+		if tmp.VisualizerHeight != 0 {
+			acc.VisualizerHeight = tmp.VisualizerHeight
+		}
+		if tmp.VisualizerPosition != "" {
+			acc.VisualizerPosition = tmp.VisualizerPosition
+		}
+		if tmp.VisualizerOpacity != 0 {
+			acc.VisualizerOpacity = tmp.VisualizerOpacity
+		}
+		if tmp.VisualizerMode != "" {
+			acc.VisualizerMode = tmp.VisualizerMode
+		}
+		if tmp.VisualizerScale != "" {
+			acc.VisualizerScale = tmp.VisualizerScale
+		}
+		if tmp.VisualizerSlide != "" {
+			acc.VisualizerSlide = tmp.VisualizerSlide
+		}
+		if tmp.VisualizerStart != 0 {
+			acc.VisualizerStart = tmp.VisualizerStart
+		}
+		if tmp.VisualizerEnd != 0 {
+			acc.VisualizerEnd = tmp.VisualizerEnd
+		}
+		if tmp.VisualizerFade != 0 {
+			acc.VisualizerFade = tmp.VisualizerFade
+		}
 		if tmp.ImagegenInspirationText != "" {
 			acc.ImagegenInspirationText = tmp.ImagegenInspirationText
+		}
+		if tmp.ImagegenStyle != "" {
+			acc.ImagegenStyle = tmp.ImagegenStyle
 		}
 	}
 	return acc, loaded, nil
@@ -198,6 +249,9 @@ func saveGenerateConfig(cmd *cobra.Command, path string) error {
 		"fade-out-font-size", "fade-out-font-color",
 		"drift", "drift-max", "drift-min", "drift-duration-percentage", "drift-easing",
 		"enable-cuda",
+		"visualizer-type", "visualizer-color", "visualizer-height",
+		"visualizer-position", "visualizer-opacity", "visualizer-mode", "visualizer-scale", "visualizer-slide",
+		"visualizer-start", "visualizer-end", "visualizer-fade",
 	}
 
 	type entry struct{ val, typ string }
@@ -378,14 +432,74 @@ func applyConfig(cmd *cobra.Command, gc GenerateConfig) {
 	if gc.EnableCUDA != "" && !cmd.Flags().Changed("enable-cuda") {
 		enableCUDA = gc.EnableCUDA == "true"
 	}
+	if gc.VisualizerType != "" && !cmd.Flags().Changed("visualizer-type") {
+		visualizerType = gc.VisualizerType
+	}
+	if gc.VisualizerColor != "" && !cmd.Flags().Changed("visualizer-color") {
+		visualizerColor = gc.VisualizerColor
+	}
+	if gc.VisualizerHeight != 0 && !cmd.Flags().Changed("visualizer-height") {
+		visualizerHeight = gc.VisualizerHeight
+	}
+	if gc.VisualizerPosition != "" && !cmd.Flags().Changed("visualizer-position") {
+		visualizerPosition = gc.VisualizerPosition
+	}
+	if gc.VisualizerOpacity != 0 && !cmd.Flags().Changed("visualizer-opacity") {
+		visualizerOpacity = gc.VisualizerOpacity
+	}
+	if gc.VisualizerMode != "" && !cmd.Flags().Changed("visualizer-mode") {
+		visualizerMode = gc.VisualizerMode
+	}
+	if gc.VisualizerScale != "" && !cmd.Flags().Changed("visualizer-scale") {
+		visualizerScale = gc.VisualizerScale
+	}
+	if gc.VisualizerSlide != "" && !cmd.Flags().Changed("visualizer-slide") {
+		visualizerSlide = gc.VisualizerSlide
+	}
+	if gc.VisualizerStart != 0 && !cmd.Flags().Changed("visualizer-start") {
+		visualizerStart = gc.VisualizerStart
+	}
+	if gc.VisualizerEnd != 0 && !cmd.Flags().Changed("visualizer-end") {
+		visualizerEnd = gc.VisualizerEnd
+	}
+	if gc.VisualizerFade != 0 && !cmd.Flags().Changed("visualizer-fade") {
+		visualizerFade = gc.VisualizerFade
+	}
+}
+
+// rStr resolves a string config field. If existing is non-empty, returns it quoted
+// and active (uncommented); otherwise returns the factory default with its original state.
+func rStr(existing, factory string, commented bool) (string, bool) {
+	if existing != "" {
+		return fmt.Sprintf("%q", existing), false
+	}
+	return factory, commented
+}
+
+// rInt resolves an int config field.
+func rInt(existing int, factory string, commented bool) (string, bool) {
+	if existing != 0 {
+		return strconv.Itoa(existing), false
+	}
+	return factory, commented
+}
+
+// rFloat resolves a float64 config field.
+func rFloat(existing float64, factory string, commented bool) (string, bool) {
+	if existing != 0 {
+		return strconv.FormatFloat(existing, 'f', -1, 64), false
+	}
+	return factory, commented
 }
 
 // buildConfigTemplate returns the fully-commented YAML config template as a string.
-func buildConfigTemplate() string {
+// gc carries any pre-existing values to substitute in place of factory defaults;
+// pass a zero-value GenerateConfig for a clean template with factory defaults.
+func buildConfigTemplate(gc GenerateConfig) string {
 	var b strings.Builder
 
 	b.WriteString("# lyricvid configuration file\n")
-	b.WriteString("# Generated by: lyricvid create-config\n")
+	b.WriteString("# Generated by: lyricvid config-file\n")
 	b.WriteString("#\n")
 	b.WriteString("# Place this file alongside your audio file as:\n")
 	b.WriteString("#   lyricvid.yml        — applies to all audio files in that folder\n")
@@ -400,186 +514,218 @@ func buildConfigTemplate() string {
 	// --- Input / Output ---
 	b.WriteString("\n\n# --- Input / Output ---\n")
 
-	wf(&b, true,
-		"Path to lyrics file (.lrc or .txt).\nAuto-detected from the audio folder if omitted (same name as audio file).",
-		"lyrics", `""`)
+	v, c := rStr(gc.Lyrics, `""`, true)
+	wf(&b, c, "Path to lyrics file (.lrc or .txt).\nAuto-detected from the audio folder if omitted (same name as audio file).", "lyrics", v)
 
-	wf(&b, true,
-		"Path to a single background image (.jpg, .jpeg, .png, .webp).\nAuto-detected from <audio-folder>/images/ if omitted. Black background if none found.",
-		"image", `""`)
+	v, c = rStr(gc.Image, `""`, true)
+	wf(&b, c, "Path to a single background image (.jpg, .jpeg, .png, .webp).\nAuto-detected from <audio-folder>/images/ if omitted. Black background if none found.", "image", v)
 
-	wf(&b, true,
-		"Output video file path.\nDefaults to the same folder and filename as the audio file, with .mp4 extension.",
-		"output", `""`)
+	v, c = rStr(gc.Output, `""`, true)
+	wf(&b, c, "Output video file path.\nDefaults to the same folder and filename as the audio file, with .mp4 extension.", "output", v)
 
 	// --- Quality / Dimensions ---
 	b.WriteString("\n\n# --- Quality / Dimensions ---\n")
 
-	wf(&b, true,
-		"Output quality preset. When set, overrides width and height.\nValid values: 480p, 720p, 1080p, 1440p",
-		"quality", `""`)
+	v, c = rStr(gc.Quality, `""`, true)
+	wf(&b, c, "Output quality preset. When set, overrides width and height.\nValid values: 480p, 720p, 1080p, 1440p", "quality", v)
 
-	wf(&b, false,
-		"Video aspect ratio as W:H. Used with quality to compute width, or independently with width/height.\nExamples: 16:9, 4:3, 21:9, 1:1",
-		"aspect-ratio", `"16:9"`)
+	v, c = rStr(gc.AspectRatio, `"16:9"`, false)
+	wf(&b, c, "Video aspect ratio as W:H. Used with quality to compute width, or independently with width/height.\nExamples: 16:9, 4:3, 21:9, 1:1", "aspect-ratio", v)
 
-	wf(&b, false,
-		"Video width in pixels. Ignored when quality is set.",
-		"width", "1920")
+	v, c = rInt(gc.Width, "1920", false)
+	wf(&b, c, "Video width in pixels. Ignored when quality is set.", "width", v)
 
-	wf(&b, false,
-		"Video height in pixels. Ignored when quality is set.",
-		"height", "1080")
+	v, c = rInt(gc.Height, "1080", false)
+	wf(&b, c, "Video height in pixels. Ignored when quality is set.", "height", v)
 
 	// --- Typography ---
 	b.WriteString("\n\n# --- Typography ---\n")
 
-	wf(&b, false,
-		"Base font size for lyrics in points.\nAuto-scaled proportionally to width using font-size-reference when not set.",
-		"font-size", "38")
+	v, c = rInt(gc.FontSize, "38", false)
+	wf(&b, c, "Base font size for lyrics in points.\nAuto-scaled proportionally to width using font-size-reference when not set.", "font-size", v)
 
-	wf(&b, false,
-		"Reference font size in pt at 1920px width.\nUsed for auto-scaling when font-size is not explicitly set.",
-		"font-size-reference", "38")
+	v, c = rInt(gc.FontSizeReference, "38", false)
+	wf(&b, c, "Reference font size in pt at 1920px width.\nUsed for auto-scaling when font-size is not explicitly set.", "font-size-reference", v)
 
-	wf(&b, false,
-		"Font color for context (non-active) lyric lines.\nAccepts hex (#RRGGBB) or FFmpeg named colors (white, yellow, etc.).",
-		"font-color", `"#FFFFFF"`)
+	v, c = rStr(gc.FontColor, `"#FFFFFF"`, false)
+	wf(&b, c, "Font color for context (non-active) lyric lines.\nAccepts hex (#RRGGBB) or FFmpeg named colors (white, yellow, etc.).", "font-color", v)
 
-	wf(&b, false,
-		"Font color for the currently active (highlighted) lyric line.\nAccepts hex (#RRGGBB) or FFmpeg named colors.",
-		"highlight-color", `"#FFD700"`)
+	v, c = rStr(gc.HighlightColor, `"#FFD700"`, false)
+	wf(&b, c, "Font color for the currently active (highlighted) lyric line.\nAccepts hex (#RRGGBB) or FFmpeg named colors.", "highlight-color", v)
 
 	// --- Background / Transition ---
 	b.WriteString("\n\n# --- Background / Transition ---\n")
 
-	wf(&b, false,
-		"Background image dimming factor. 0.0 = pure black overlay, 1.0 = no dimming.",
-		"bg-dim", "0.4")
+	v, c = rFloat(gc.BgDim, "0.4", false)
+	wf(&b, c, "Background image dimming factor. 0.0 = pure black overlay, 1.0 = no dimming.", "bg-dim", v)
 
-	wf(&b, false,
-		"Transition effect between images in a slideshow.\nValid values: fade, fadeblack, fadewhite, dissolve, wipeleft, wiperight,\n             wipeup, wipedown, slideleft, slideright, radial, pixelize, none",
-		"transition", `"fade"`)
+	v, c = rStr(gc.Transition, `"fade"`, false)
+	wf(&b, c, "Transition effect between images in a slideshow.\nValid values: fade, fadeblack, fadewhite, dissolve, wipeleft, wiperight,\n             wipeup, wipedown, slideleft, slideright, radial, pixelize, none", "transition", v)
 
-	wf(&b, false,
-		"Duration of the transition effect in seconds.",
-		"transition-duration", "3.0")
+	v, c = rFloat(gc.TransitionDuration, "3.0", false)
+	wf(&b, c, "Duration of the transition effect in seconds.", "transition-duration", v)
 
 	// --- Lyric Positioning ---
 	b.WriteString("\n\n# --- Lyric Positioning ---\n")
 
-	wf(&b, false,
-		"Vertical position of the focused (active) lyric line as a fraction of the frame height.\n0.0 = top of frame, 1.0 = bottom of frame.",
-		"lyric-position", "0.65")
+	v, c = rFloat(gc.LyricPosition, "0.65", false)
+	wf(&b, c, "Vertical position of the focused (active) lyric line as a fraction of the frame height.\n0.0 = top of frame, 1.0 = bottom of frame.", "lyric-position", v)
 
-	wf(&b, false,
-		"Seconds to cross-fade between lyric lines. Set to 0 for hard cuts.",
-		"lyric-fade", "0.3")
+	v, c = rFloat(gc.LyricFade, "0.3", false)
+	wf(&b, c, "Seconds to cross-fade between lyric lines. Set to 0 for hard cuts.", "lyric-fade", v)
 
-	wf(&b, false,
-		"Alpha curve for lyric cross-fade transitions.\nValid values: linear, smooth",
-		"lyric-fade-style", `"linear"`)
+	v, c = rStr(gc.LyricFadeStyle, `"linear"`, false)
+	wf(&b, c, "Alpha curve for lyric cross-fade transitions.\nValid values: linear, smooth", "lyric-fade-style", v)
 
 	// --- Fade-In ---
 	b.WriteString("\n\n# --- Fade-In ---\n")
 
-	wf(&b, true,
-		"Seconds to fade the video in from black at the start. Set to 0 to disable.",
-		"fade-in-seconds", "0")
+	v, c = rFloat(gc.FadeInSeconds, "0", true)
+	wf(&b, c, "Seconds to fade the video in from black at the start. Set to 0 to disable.", "fade-in-seconds", v)
 
-	wf(&b, true,
-		"Title text to display during the fade-in period.\nUse | to separate multiple lines. Example: \"Song Title|Artist Name\"",
-		"fade-in-title", `""`)
+	v, c = rStr(gc.FadeInTitle, `""`, true)
+	wf(&b, c, "Title text to display during the fade-in period.\nUse | to separate multiple lines. Example: \"Song Title|Artist Name\"", "fade-in-title", v)
 
-	wf(&b, false,
-		"Seconds to fade the title out after the fade-in period ends.\nThe title is fully visible during the fade-in, then fades out over this duration.",
-		"fade-in-title-fade-out", "1.0")
+	v, c = rFloat(gc.FadeInTitleFadeOut, "1.0", false)
+	wf(&b, c, "Seconds to fade the title out after the fade-in period ends.\nThe title is fully visible during the fade-in, then fades out over this duration.", "fade-in-title-fade-out", v)
 
-	wf(&b, false,
-		"Font size(s) for the fade-in title in points.\nUse | to set different sizes per line. The last value is used for any remaining lines.\nExample: \"80|60\" sets the first line to 80pt and remaining lines to 60pt.",
-		"fade-in-font-size", `"60"`)
+	v, c = rStr(gc.FadeInFontSize, `"60"`, false)
+	wf(&b, c, "Font size(s) for the fade-in title in points.\nUse | to set different sizes per line. The last value is used for any remaining lines.\nExample: \"80|60\" sets the first line to 80pt and remaining lines to 60pt.", "fade-in-font-size", v)
 
-	wf(&b, true,
-		"Font color(s) for the fade-in title. Defaults to font-color when not set.\nUse | to set different colors per line. The last value is used for any remaining lines.\nAccepts hex (#RRGGBB) or FFmpeg named colors.",
-		"fade-in-font-color", `""`)
+	v, c = rStr(gc.FadeInFontColor, `""`, true)
+	wf(&b, c, "Font color(s) for the fade-in title. Defaults to font-color when not set.\nUse | to set different colors per line. The last value is used for any remaining lines.\nAccepts hex (#RRGGBB) or FFmpeg named colors.", "fade-in-font-color", v)
 
 	// --- Fade-Out ---
 	b.WriteString("\n\n# --- Fade-Out ---\n")
 
-	wf(&b, true,
-		"Seconds to fade the video out to black at the end. Set to 0 to disable.",
-		"fade-out-seconds", "0")
+	v, c = rFloat(gc.FadeOutSeconds, "0", true)
+	wf(&b, c, "Seconds to fade the video out to black at the end. Set to 0 to disable.", "fade-out-seconds", v)
 
-	wf(&b, true,
-		"Title text to display during the fade-out period.\nUse | to separate multiple lines. Example: \"The End|© 2025\"",
-		"fade-out-title", `""`)
+	v, c = rStr(gc.FadeOutTitle, `""`, true)
+	wf(&b, c, "Title text to display during the fade-out period.\nUse | to separate multiple lines. Example: \"The End|© 2025\"", "fade-out-title", v)
 
-	wf(&b, false,
-		"Seconds to fade the title in before the fade-out period begins.\nThe title fades in over this duration, then remains fully visible during the fade-out.",
-		"fade-out-title-fade-out", "1.0")
+	v, c = rFloat(gc.FadeOutTitleFadeOut, "1.0", false)
+	wf(&b, c, "Seconds to fade the title in before the fade-out period begins.\nThe title fades in over this duration, then remains fully visible during the fade-out.", "fade-out-title-fade-out", v)
 
-	wf(&b, false,
-		"Font size(s) for the fade-out title in points.\nUse | to set different sizes per line. The last value is used for any remaining lines.",
-		"fade-out-font-size", `"60"`)
+	v, c = rStr(gc.FadeOutFontSize, `"60"`, false)
+	wf(&b, c, "Font size(s) for the fade-out title in points.\nUse | to set different sizes per line. The last value is used for any remaining lines.", "fade-out-font-size", v)
 
-	wf(&b, true,
-		"Font color(s) for the fade-out title. Defaults to font-color when not set.\nUse | to set different colors per line. The last value is used for any remaining lines.\nAccepts hex (#RRGGBB) or FFmpeg named colors.",
-		"fade-out-font-color", `""`)
+	v, c = rStr(gc.FadeOutFontColor, `""`, true)
+	wf(&b, c, "Font color(s) for the fade-out title. Defaults to font-color when not set.\nUse | to set different colors per line. The last value is used for any remaining lines.\nAccepts hex (#RRGGBB) or FFmpeg named colors.", "fade-out-font-color", v)
 
 	// --- Drift ---
 	b.WriteString("\n\n# --- Drift ---\n")
 
-	wf(&b, true,
-		"Background pan/zoom animation applied to each image.\nComma-separated list of drift types; one is chosen randomly per image.\nValid values: random, left, right, up, down, zoom-in, zoom-out\n  random           — pick from all types\n  left/right/up/down — slow pan in that direction\n  zoom-in/zoom-out   — slow zoom animation\nLeave empty to disable.",
-		"drift", `""`)
+	v, c = rStr(gc.Drift, `""`, true)
+	wf(&b, c, "Background pan/zoom animation applied to each image.\nComma-separated list of drift types; one is chosen randomly per image.\nValid values: random, left, right, up, down, zoom-in, zoom-out\n  random           — pick from all types\n  left/right/up/down — slow pan in that direction\n  zoom-in/zoom-out   — slow zoom animation\nLeave empty to disable.", "drift", v)
 
-	wf(&b, false,
-		"Maximum drift distance in pixels (applies to both pan offset and zoom margin).",
-		"drift-max", "60")
+	v, c = rInt(gc.DriftMax, "60", false)
+	wf(&b, c, "Maximum drift distance in pixels (applies to both pan offset and zoom margin).", "drift-max", v)
 
-	wf(&b, false,
-		"Minimum drift distance in pixels.",
-		"drift-min", "10")
+	v, c = rInt(gc.DriftMin, "10", false)
+	wf(&b, c, "Minimum drift distance in pixels.", "drift-min", v)
 
-	wf(&b, false,
-		"Percentage of each image\u2019s display time used for the drift animation (1\u2013100).\nThe image holds at the final drift position for the remainder of its display time.",
-		"drift-duration-percentage", "90")
+	v, c = rFloat(gc.DriftDurationPct, "90", false)
+	wf(&b, c, "Percentage of each image\u2019s display time used for the drift animation (1\u2013100).\nThe image holds at the final drift position for the remainder of its display time.", "drift-duration-percentage", v)
 
-	wf(&b, false,
-		"Easing curve applied to the drift motion.\nValid values: linear, quad (default), cubic, smooth\n  linear — constant speed\n  quad   — ease-out quadratic (decelerates, natural camera feel)\n  cubic  — stronger deceleration\n  smooth — ease-in-out (starts and ends slowly)",
-		"drift-easing", `"quad"`)
+	v, c = rStr(gc.DriftEasing, `"quad"`, false)
+	wf(&b, c, "Easing curve applied to the drift motion.\nValid values: linear, quad (default), cubic, smooth\n  linear — constant speed\n  quad   — ease-out quadratic (decelerates, natural camera feel)\n  cubic  — stronger deceleration\n  smooth — ease-in-out (starts and ends slowly)", "drift-easing", v)
+
+	// --- Audio Visualizer ---
+	b.WriteString("\n\n# --- Audio Visualizer ---\n")
+
+	v, c = rStr(gc.VisualizerType, `"none"`, true)
+	wf(&b, c, "Audio visualizer overlay drawn on top of the video.\nValid values: none, waveform, spectrum, freqs\n  none      — disabled (default)\n  waveform  — animated audio waveform\n  spectrum  — frequency spectrogram\n  freqs     — frequency bar graph", "visualizer-type", v)
+
+	v, c = rStr(gc.VisualizerColor, `"white"`, false)
+	wf(&b, c, "Color of the visualizer. Accepts hex (#RRGGBB) or FFmpeg named colors (white, cyan, etc.).", "visualizer-color", v)
+
+	v, c = rFloat(gc.VisualizerHeight, "0.15", false)
+	wf(&b, c, "Height of the visualizer as a fraction of the video height (0.0–1.0).\nExample: 0.15 = bottom 15% of the frame.", "visualizer-height", v)
+
+	v, c = rStr(gc.VisualizerPosition, `"bottom"`, false)
+	wf(&b, c, "Vertical placement of the visualizer.\nValid values: top, bottom", "visualizer-position", v)
+
+	v, c = rFloat(gc.VisualizerOpacity, "0.8", false)
+	wf(&b, c, "Opacity of the visualizer overlay (0.0 = fully transparent, 1.0 = fully opaque).", "visualizer-opacity", v)
+
+	v, c = rStr(gc.VisualizerMode, `"line"`, false)
+	wf(&b, c, "Drawing mode for the waveform visualizer (only used when visualizer-type is waveform).\nValid values: line, point, p2p, cline", "visualizer-mode", v)
+
+	v, c = rStr(gc.VisualizerScale, `"log"`, false)
+	wf(&b, c, "Amplitude/magnitude scale for spectrum and freqs visualizers (ignored for waveform).\nValid values: lin, log, sqrt, cbrt", "visualizer-scale", v)
+
+	v, c = rStr(gc.VisualizerSlide, `"scroll"`, false)
+	wf(&b, c, "Sliding mode for the spectrum visualizer (ignored for waveform and freqs).\nValid values: replace, scroll, fullframe, rscroll, lreplace", "visualizer-slide", v)
+
+	v, c = rFloat(gc.VisualizerStart, "10", false)
+	wf(&b, c, "Time in seconds from the start of audio when the visualizer appears.\nSet to 0 to show from the very beginning.", "visualizer-start", v)
+
+	v, c = rFloat(gc.VisualizerEnd, "-1", false)
+	wf(&b, c, "Time in seconds from the start of audio when the visualizer disappears.\nNegative value = 10 seconds before the end of the audio.", "visualizer-end", v)
+
+	v, c = rFloat(gc.VisualizerFade, "1", false)
+	wf(&b, c, "Seconds to fade the visualizer in at its start time and out at its end time.\nSet to 0 for an instant cut.", "visualizer-fade", v)
 
 	// --- Hardware Acceleration ---
 	b.WriteString("\n\n# --- Hardware Acceleration ---\n")
 
-	wf(&b, false,
-		"Enable CUDA hardware acceleration for encoding (h264_nvenc).\nWhen true, CUDA availability is probed on each run; falls back to libx264 if not found.\nSet to false to always use CPU encoding (libx264).\nValid values: true, false",
-		"enable-cuda", `"true"`)
+	v, c = rStr(gc.EnableCUDA, `"true"`, false)
+	wf(&b, c, "Enable CUDA hardware acceleration for encoding (h264_nvenc).\nWhen true, CUDA availability is probed on each run; falls back to libx264 if not found.\nSet to false to always use CPU encoding (libx264).\nValid values: true, false", "enable-cuda", v)
 
 	// --- Image Generation ---
 	b.WriteString("\n\n# --- Image Generation ---\n")
 
 	b.WriteString("\n")
+	b.WriteString("# Visual style/theme applied to every image generated by 'lyricvid image-gen'.\n")
+	b.WriteString("# Overridden by the --style flag.\n")
+	b.WriteString("# Example: \"cinematic film noir, high contrast, muted tones\"\n")
+	v, c = rStr(gc.ImagegenStyle, `""`, true)
+	wf(&b, c, "", "imagegen-style", v)
+
+	b.WriteString("\n")
 	b.WriteString("# Inspiration text for the 'lyricvid image-gen' command.\n")
 	b.WriteString("# Embed your lyrics or descriptive text directly instead of a separate file.\n")
 	b.WriteString("# Used when --inspiration is not given and no .lrc/.txt is auto-detected.\n")
+	b.WriteString("# Use {lyrics} as a placeholder — it will be replaced with the song lyrics at runtime.\n")
 	b.WriteString("# Use a YAML literal block scalar (|) for multi-line content.\n")
-	b.WriteString("# imagegen-inspiration: |\n")
-	b.WriteString("#   Paste your song lyrics or scene description here.\n")
-	b.WriteString("#   Each line is preserved as-is.\n")
+	if gc.ImagegenInspirationText != "" {
+		fmt.Fprintf(&b, "imagegen-inspiration: |\n")
+		for _, line := range strings.Split(gc.ImagegenInspirationText, "\n") {
+			fmt.Fprintf(&b, "  %s\n", line)
+		}
+	} else {
+		b.WriteString("# imagegen-inspiration: |\n")
+		b.WriteString("#   Paste your song lyrics or scene description here.\n")
+		b.WriteString("#   Each line is preserved as-is.\n")
+	}
 
 	b.WriteString("\n")
 
 	return b.String()
 }
 
-// runCreateConfig writes a fully-commented YAML config template.
-func runCreateConfig(_ *cobra.Command, args []string) error {
+// runConfigFile writes a fully-commented YAML config template.
+// If the target file already exists its current values are read and carried
+// over into the fresh template, preserving settings while updating comments
+// and adding any fields introduced in newer versions of lyricvid.
+func runConfigFile(_ *cobra.Command, args []string) error {
 	outPath := filepath.Join(".", "lyricvid.yml")
 	if len(args) > 0 {
 		outPath = args[0]
 	}
-	if err := os.WriteFile(outPath, []byte(buildConfigTemplate()), 0644); err != nil {
+
+	var gc GenerateConfig
+	if _, err := os.Stat(outPath); err == nil {
+		loaded, _, err := loadGenerateConfig([]string{outPath})
+		if err != nil {
+			return fmt.Errorf("reading existing config %q: %w", outPath, err)
+		}
+		gc = loaded
+		fmt.Printf("Merging existing values from %s\n", outPath)
+	}
+
+	if err := os.WriteFile(outPath, []byte(buildConfigTemplate(gc)), 0644); err != nil {
 		return fmt.Errorf("writing config file: %w", err)
 	}
 	fmt.Printf("Config written to %s\n", outPath)

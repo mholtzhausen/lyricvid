@@ -64,6 +64,7 @@ var (
 
 	// imagegen flags
 	imagegenInspirationPath string
+	imagegenConfigFilePath  string
 	imagegenCount           int
 	imagegenAPIKey          string
 	imagegenQuality         string
@@ -79,6 +80,19 @@ var (
 
 	// hardware acceleration
 	enableCUDA bool
+
+	// audio visualizer
+	visualizerType     string
+	visualizerColor    string
+	visualizerHeight   float64
+	visualizerPosition string
+	visualizerOpacity  float64
+	visualizerMode     string
+	visualizerScale    string
+	visualizerSlide    string
+	visualizerStart    float64
+	visualizerEnd      float64
+	visualizerFade     float64
 )
 
 func main() {
@@ -126,6 +140,8 @@ It supports LRC (timestamped) and plain text lyrics files.`,
 		"Visual style/theme applied to every generated image (e.g. \"cinematic film noir, high contrast\")")
 	imagegenCmd.Flags().StringVar(&imagegenAspectRatio, "aspect-ratio", "16:9",
 		"Image aspect ratio as W:H passed to Gemini (e.g. 16:9, 4:3, 1:1)")
+	imagegenCmd.Flags().StringVar(&imagegenConfigFilePath, "config", "",
+		"Path to a YAML config file (overrides auto-detected lyricvid.yml / <stem>.yml)")
 
 	saveCmd := &cobra.Command{
 		Use:   "save <audio> [config_file]",
@@ -137,11 +153,15 @@ It supports LRC (timestamped) and plain text lyrics files.`,
 	addFlags(saveCmd)
 
 	createConfigCmd := &cobra.Command{
-		Use:   "create-config [path]",
-		Short: "Write a YAML config file with all generate defaults",
-		Long:  "Writes a fully-commented YAML config file. Defaults to ./lyricvid.yml if no path is given.",
-		Args:  cobra.MaximumNArgs(1),
-		RunE:  runCreateConfig,
+		Use:   "config-file [path]",
+		Short: "Write a fully-commented YAML config file with all options",
+		Long: `Writes a fully-commented YAML config file. Defaults to ./lyricvid.yml if no path is given.
+
+If the file already exists its current values are read and carried over into the
+freshly generated template, so you keep your settings while gaining any new fields
+or updated comments added in later versions of lyricvid.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: runConfigFile,
 	}
 
 	aiCmd := &cobra.Command{
@@ -217,6 +237,18 @@ func addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&driftEasing, "drift-easing", "quad", "Easing curve for drift animation: linear, quad (default), cubic, smooth")
 
 	cmd.Flags().BoolVar(&enableCUDA, "enable-cuda", true, "Use CUDA hardware acceleration (h264_nvenc encoder); probes availability on each run, falls back to libx264 if unavailable")
+
+	cmd.Flags().StringVar(&visualizerType, "visualizer-type", "none", "Audio visualizer overlay: none, waveform, spectrum, freqs")
+	cmd.Flags().StringVar(&visualizerColor, "visualizer-color", "white", "Color for the audio visualizer (hex or FFmpeg named color)")
+	cmd.Flags().Float64Var(&visualizerHeight, "visualizer-height", 0.15, "Height of the visualizer as a fraction of video height (0.0–1.0)")
+	cmd.Flags().StringVar(&visualizerPosition, "visualizer-position", "bottom", "Position of the visualizer: top or bottom")
+	cmd.Flags().Float64Var(&visualizerOpacity, "visualizer-opacity", 0.8, "Opacity of the visualizer overlay (0.0–1.0)")
+	cmd.Flags().StringVar(&visualizerMode, "visualizer-mode", "line", "Waveform drawing mode (only for visualizer-type=waveform): line, point, p2p, cline")
+	cmd.Flags().StringVar(&visualizerScale, "visualizer-scale", "log", "Amplitude scale for spectrum/freqs visualizers: lin, log, sqrt, cbrt")
+	cmd.Flags().StringVar(&visualizerSlide, "visualizer-slide", "scroll", "Sliding mode for spectrum visualizer: replace, scroll, fullframe, rscroll, lreplace")
+	cmd.Flags().Float64Var(&visualizerStart, "visualizer-start", 10, "Time (seconds) when the visualizer appears; 0 = from the very start")
+	cmd.Flags().Float64Var(&visualizerEnd, "visualizer-end", -1, "Time (seconds) when the visualizer disappears; negative = 10s before end of audio")
+	cmd.Flags().Float64Var(&visualizerFade, "visualizer-fade", 1, "Seconds to fade the visualizer in/out at its start and end times; 0 = instant")
 }
 
 func runGenerate(cmd *cobra.Command, args []string) error {
@@ -233,11 +265,14 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load config files (lowest → highest priority):
-	//   <audio-dir>/lyricvid.yml, <audio-dir>/<stem>.yml, --config <path>
+	//   <audio-dir>/lyricvid.yml, <audio-dir>/lyricvid.yaml,
+	//   <audio-dir>/<stem>.yml,   <audio-dir>/<stem>.yaml,   --config <path>
 	audioDir, audioStemName := audioStem(audioPath)
 	cfgPaths := []string{
 		filepath.Join(audioDir, "lyricvid.yml"),
+		filepath.Join(audioDir, "lyricvid.yaml"),
 		filepath.Join(audioDir, audioStemName+".yml"),
+		filepath.Join(audioDir, audioStemName+".yaml"),
 	}
 	if configFilePath != "" {
 		if _, err := os.Stat(configFilePath); err != nil {
@@ -401,6 +436,41 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Validate visualizer settings
+	validVisType := map[string]bool{"none": true, "waveform": true, "spectrum": true, "freqs": true}
+	if !validVisType[visualizerType] {
+		return fmt.Errorf("unknown visualizer-type %q; valid values: none, waveform, spectrum, freqs", visualizerType)
+	}
+	if visualizerType != "none" {
+		if visualizerHeight <= 0 || visualizerHeight > 1 {
+			return fmt.Errorf("visualizer-height must be between 0.0 and 1.0")
+		}
+		if visualizerOpacity < 0 || visualizerOpacity > 1 {
+			return fmt.Errorf("visualizer-opacity must be between 0.0 and 1.0")
+		}
+		if visualizerPosition != "top" && visualizerPosition != "bottom" {
+			return fmt.Errorf("visualizer-position must be \"top\" or \"bottom\"")
+		}
+		if visualizerType == "waveform" {
+			validMode := map[string]bool{"line": true, "point": true, "p2p": true, "cline": true}
+			if !validMode[visualizerMode] {
+				return fmt.Errorf("unknown visualizer-mode %q; valid values: line, point, p2p, cline", visualizerMode)
+			}
+		}
+		if visualizerType == "spectrum" || visualizerType == "freqs" {
+			validScale := map[string]bool{"lin": true, "log": true, "sqrt": true, "cbrt": true}
+			if !validScale[visualizerScale] {
+				return fmt.Errorf("unknown visualizer-scale %q; valid values: lin, log, sqrt, cbrt", visualizerScale)
+			}
+		}
+		if visualizerType == "spectrum" {
+			validSlide := map[string]bool{"replace": true, "scroll": true, "fullframe": true, "rscroll": true, "lreplace": true}
+			if !validSlide[visualizerSlide] {
+				return fmt.Errorf("unknown visualizer-slide %q; valid values: replace, scroll, fullframe, rscroll, lreplace", visualizerSlide)
+			}
+		}
+	}
+
 	// Probe CUDA availability
 	cudaAvailable := false
 	if enableCUDA {
@@ -510,6 +580,27 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	} else {
 		p("cuda", "disabled  (libx264)")
 	}
+	if visualizerType != "none" {
+		effectiveVisEnd := visualizerEnd
+		if effectiveVisEnd < 0 {
+			effectiveVisEnd = duration - 10
+		}
+		visDesc := fmt.Sprintf("%s  (%.0f%%h  %s  opacity=%.2f  start=%.1fs  end=%.1fs  fade=%.1fs)",
+			visualizerType, visualizerHeight*100, visualizerPosition, visualizerOpacity,
+			visualizerStart, effectiveVisEnd, visualizerFade)
+		if visualizerType == "waveform" {
+			visDesc += "  mode=" + visualizerMode
+		}
+		if visualizerType == "spectrum" || visualizerType == "freqs" {
+			visDesc += "  scale=" + visualizerScale
+		}
+		if visualizerType == "spectrum" {
+			visDesc += "  slide=" + visualizerSlide
+		}
+		p("visualizer", visDesc)
+	} else {
+		p("visualizer", "disabled")
+	}
 	fmt.Println()
 
 	if fadeInSeconds > 0 {
@@ -574,6 +665,18 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		DriftEasing:      driftEasing,
 
 		EnableCUDA: cudaAvailable,
+
+		VisualizerType:     visualizerType,
+		VisualizerColor:    visualizerColor,
+		VisualizerHeight:   visualizerHeight,
+		VisualizerPosition: visualizerPosition,
+		VisualizerOpacity:  visualizerOpacity,
+		VisualizerMode:     visualizerMode,
+		VisualizerScale:    visualizerScale,
+		VisualizerSlide:    visualizerSlide,
+		VisualizerStart:    visualizerStart,
+		VisualizerEnd:      visualizerEnd,
+		VisualizerFade:     visualizerFade,
 	}
 
 	return video.Render(cfg)
@@ -644,28 +747,45 @@ func runImagegen(_ *cobra.Command, args []string) error {
 
 	folder, stem := audioStem(audioPath)
 
-	// Load per-song config for image-gen settings (lyricvid.yml and <stem>.yml)
-	gc, _, err := loadGenerateConfig([]string{
+	// Load per-song config for image-gen settings.
+	// Search order: lyricvid.yml/yaml → <stem>.yml/yaml → <image-folder>.yml/yaml
+	cfgCandidates := []string{
 		filepath.Join(folder, "lyricvid.yml"),
+		filepath.Join(folder, "lyricvid.yaml"),
 		filepath.Join(folder, stem+".yml"),
-	})
+		filepath.Join(folder, stem+".yaml"),
+	}
+	if len(args) == 2 {
+		name := filepath.Base(args[1])
+		cfgCandidates = append(cfgCandidates,
+			filepath.Join(folder, name+".yml"),
+			filepath.Join(folder, name+".yaml"),
+		)
+	}
+	if imagegenConfigFilePath != "" {
+		if _, err := os.Stat(imagegenConfigFilePath); err != nil {
+			return fmt.Errorf("config file not found: %s", imagegenConfigFilePath)
+		}
+		cfgCandidates = append(cfgCandidates, imagegenConfigFilePath)
+	}
+	gc, _, err := loadGenerateConfig(cfgCandidates)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
+	// Apply config values not covered by CLI flags.
+	if gc.ImagegenStyle != "" && imagegenStyle == "" {
+		imagegenStyle = gc.ImagegenStyle
+	}
+
+	// Resolve inspiration text. Priority (highest → lowest):
+	//   1. --inspiration flag (explicit file path)
+	//   2. imagegen-inspiration from config file
+	//   3. Auto-detected .lrc/.txt alongside the audio
 	inspirationPath := imagegenInspirationPath
 	if inspirationPath != "" {
 		if err := validateFile(inspirationPath, []string{".lrc", ".txt"}); err != nil {
 			return fmt.Errorf("inspiration: %w", err)
-		}
-	} else {
-		for _, ext := range []string{".lrc", ".txt"} {
-			candidate := filepath.Join(folder, stem+ext)
-			if _, err := os.Stat(candidate); err == nil {
-				inspirationPath = candidate
-				fmt.Printf("Auto-detected inspiration: %s\n", inspirationPath)
-				break
-			}
 		}
 	}
 
@@ -680,7 +800,45 @@ func runImagegen(_ *cobra.Command, args []string) error {
 		inspirationText = strings.TrimSpace(gc.ImagegenInspirationText)
 		fmt.Println("Using inline inspiration text from config.")
 	} else {
+		// Fall back to auto-detected .lrc/.txt alongside the audio.
+		for _, ext := range []string{".lrc", ".txt"} {
+			candidate := filepath.Join(folder, stem+ext)
+			if _, err := os.Stat(candidate); err == nil {
+				fmt.Printf("Auto-detected inspiration: %s\n", candidate)
+				data, err := os.ReadFile(candidate)
+				if err != nil {
+					return fmt.Errorf("reading inspiration file %q: %w", candidate, err)
+				}
+				inspirationText = strings.TrimSpace(string(data))
+				break
+			}
+		}
+	}
+	if inspirationText == "" {
 		return fmt.Errorf("no inspiration found; provide --inspiration, place a .lrc/.txt alongside the audio, or set imagegen-inspiration in lyricvid.yml")
+	}
+
+	// Substitute {lyrics} with the song's lyrics text if referenced.
+	if strings.Contains(inspirationText, "{lyrics}") {
+		var lyricsText string
+		for _, ext := range []string{".lrc", ".txt"} {
+			candidate := filepath.Join(folder, stem+ext)
+			if _, err := os.Stat(candidate); err == nil {
+				lines, _, err := lyrics.ParseFile(candidate)
+				if err != nil {
+					return fmt.Errorf("reading lyrics for substitution %q: %w", candidate, err)
+				}
+				parts := make([]string, 0, len(lines))
+				for _, l := range lines {
+					if l.Text != "" {
+						parts = append(parts, l.Text)
+					}
+				}
+				lyricsText = strings.Join(parts, "\n")
+				break
+			}
+		}
+		inspirationText = strings.ReplaceAll(inspirationText, "{lyrics}", lyricsText)
 	}
 
 	outputDir := filepath.Join(folder, "images")
@@ -691,6 +849,29 @@ func runImagegen(_ *cobra.Command, args []string) error {
 			outputDir = filepath.Join(folder, args[1])
 		}
 	}
+
+	// Print resolved configuration before any generation output.
+	fmt.Println("Image generation settings:")
+	fmt.Printf("  audio:        %s\n", audioPath)
+	fmt.Printf("  output:       %s\n", outputDir)
+	fmt.Printf("  count:        %d\n", imagegenCount)
+	fmt.Printf("  quality:      %s (%s)\n", imagegenQuality, preset.ImageSize)
+	fmt.Printf("  aspect-ratio: %s\n", imagegenAspectRatio)
+	if imagegenStyle != "" {
+		fmt.Printf("  style:        %s\n", imagegenStyle)
+	}
+	if imagegenConfigFilePath != "" {
+		fmt.Printf("  config:       %s\n", imagegenConfigFilePath)
+	}
+	if inspirationPath != "" {
+		fmt.Printf("  inspiration:  %s\n", inspirationPath)
+	} else {
+		fmt.Printf("  inspiration:  (inline from config)\n")
+	}
+	fmt.Println()
+	fmt.Println("Inspiration text:")
+	fmt.Println(inspirationText)
+	fmt.Println()
 
 	return imagegen.Generate(context.Background(), imagegen.Config{
 		APIKey:          cfg.GeminiAPIKey,
@@ -819,7 +1000,7 @@ func runInit(_ *cobra.Command, args []string) error {
 	if _, err := os.Stat(configPath); err == nil {
 		fmt.Printf("Config already exists, skipping: %s\n", configPath)
 	} else {
-		yml := buildConfigTemplate()
+		yml := buildConfigTemplate(GenerateConfig{})
 		yml = strings.ReplaceAll(yml, "# Generated by: lyricvid create-config", "# Generated by: lyricvid init")
 		yml = strings.ReplaceAll(yml, `# image: ""`, `image: "`+project+`"`)
 		yml = strings.ReplaceAll(yml, "# fade-in-seconds: 0", "fade-in-seconds: 5")

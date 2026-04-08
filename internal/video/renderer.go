@@ -53,6 +53,18 @@ type Config struct {
 	DriftEasing      string   // easing curve: linear, quad (default), cubic, smooth
 
 	EnableCUDA bool // use h264_nvenc encoder when true
+
+	VisualizerType     string  // "waveform", "spectrum", "freqs", or "" / "none" to disable
+	VisualizerColor    string  // color of the visualizer (e.g. "white", "#FFD700")
+	VisualizerHeight   float64 // height as a fraction of video height (e.g. 0.15)
+	VisualizerPosition string  // "top" or "bottom"
+	VisualizerOpacity  float64 // 0.0–1.0
+	VisualizerMode     string  // waveform mode: "line", "point", "p2p", "cline"
+	VisualizerScale    string  // amplitude/magnitude scale: lin, log, sqrt, cbrt (spectrum/freqs only)
+	VisualizerSlide    string  // sliding mode: replace, scroll, fullframe, rscroll, lreplace (spectrum only)
+	VisualizerStart    float64 // seconds from start when visualizer appears; negative = use default (10s)
+	VisualizerEnd      float64 // seconds from start when visualizer disappears; negative = Duration-10
+	VisualizerFade     float64 // seconds to fade in/out; 0 = instant
 }
 
 // Render builds and executes the FFmpeg command to produce the video.
@@ -262,8 +274,126 @@ func buildFilterComplex(cfg Config, fontPath string) (string, error) {
 		chain = []string{"null"}
 	}
 
-	drawtextSection := "[bg]\n" + strings.Join(chain, ",\n") + "\n[out]"
+	// 6. Audio visualizer overlay
+	visFilter, err := buildVisualizerFilter(cfg, len(cfg.ImagePaths))
+	if err != nil {
+		return "", err
+	}
+
+	var drawtextSection string
+	if visFilter != "" {
+		drawtextSection = "[bg]\n" + strings.Join(chain, ",\n") + "\n[pre_vis];\n" + visFilter
+	} else {
+		drawtextSection = "[bg]\n" + strings.Join(chain, ",\n") + "\n[out]"
+	}
 	return bgSource + ";\n" + drawtextSection, nil
+}
+
+// buildVisualizerFilter returns the FFmpeg filter fragment for the audio visualizer overlay,
+// or an empty string if the visualizer is disabled.
+// audioIdx is the FFmpeg input index of the audio stream (= number of image inputs).
+func buildVisualizerFilter(cfg Config, audioIdx int) (string, error) {
+	if cfg.VisualizerType == "" || cfg.VisualizerType == "none" {
+		return "", nil
+	}
+
+	visH := int(float64(cfg.Height) * cfg.VisualizerHeight)
+	if visH <= 0 {
+		visH = int(float64(cfg.Height) * 0.15)
+	}
+
+	color := cfg.VisualizerColor
+	if color == "" {
+		color = "white"
+	}
+
+	var vizChain string
+	switch cfg.VisualizerType {
+	case "waveform":
+		mode := cfg.VisualizerMode
+		if mode == "" {
+			mode = "line"
+		}
+		vizChain = fmt.Sprintf("[%d:a]showwaves=s=%dx%d:mode=%s:rate=30:colors=%s[vis_raw]",
+			audioIdx, cfg.Width, visH, mode, color)
+	case "spectrum":
+		// showspectrum uses `color` as an enum scheme, not a free-form color;
+		// `colors` is not a valid option and will cause an FFmpeg error.
+		scale := cfg.VisualizerScale
+		if scale == "" {
+			scale = "log"
+		}
+		slide := cfg.VisualizerSlide
+		if slide == "" {
+			slide = "scroll"
+		}
+		vizChain = fmt.Sprintf("[%d:a]showspectrum=s=%dx%d:color=channel:scale=%s:slide=%s[vis_raw]",
+			audioIdx, cfg.Width, visH, scale, slide)
+	case "freqs":
+		scale := cfg.VisualizerScale
+		if scale == "" {
+			scale = "log"
+		}
+		vizChain = fmt.Sprintf("[%d:a]showfreqs=s=%dx%d:mode=bar:ascale=%s:colors=%s[vis_raw]",
+			audioIdx, cfg.Width, visH, scale, color)
+	default:
+		return "", fmt.Errorf("unknown visualizer type %q; valid values: waveform, spectrum, freqs", cfg.VisualizerType)
+	}
+
+	opacity := cfg.VisualizerOpacity
+	if opacity <= 0 {
+		opacity = 0.8
+	}
+
+	// Resolve start/end times; negative values use defaults (10s from each end).
+	visStart := cfg.VisualizerStart
+	if visStart < 0 {
+		visStart = 10
+	}
+	visEnd := cfg.VisualizerEnd
+	if visEnd < 0 {
+		visEnd = cfg.Duration - 10
+		if visEnd < visStart {
+			visEnd = visStart
+		}
+	}
+
+	// Key out the black background produced by the visualizer filters, then apply opacity.
+	alphaChain := fmt.Sprintf("[vis_raw]colorkey=color=black:similarity=0.05:blend=0.1,format=rgba,colorchannelmixer=aa=%.3f[vis_colored]", opacity)
+
+	// Optionally fade the visualizer in/out at its start and end times.
+	visLabel := "vis_colored"
+	var fadePart string
+	if cfg.VisualizerFade > 0 {
+		fadeOutStart := visEnd - cfg.VisualizerFade
+		if fadeOutStart < visStart {
+			fadeOutStart = visStart
+		}
+		fadePart = fmt.Sprintf(
+			"[vis_colored]fade=type=in:start_time=%.3f:duration=%.3f:alpha=1,fade=type=out:start_time=%.3f:duration=%.3f:alpha=1[vis_faded]",
+			visStart, cfg.VisualizerFade, fadeOutStart, cfg.VisualizerFade,
+		)
+		visLabel = "vis_faded"
+	}
+
+	var yExpr string
+	if cfg.VisualizerPosition == "top" {
+		yExpr = "0"
+	} else {
+		yExpr = fmt.Sprintf("%d", cfg.Height-visH)
+	}
+
+	overlayChain := fmt.Sprintf(
+		"[pre_vis][%s]overlay=x=0:y=%s:format=auto:enable='between(t,%.3f,%.3f)'[out]",
+		visLabel, yExpr, visStart, visEnd,
+	)
+
+	parts := []string{vizChain, alphaChain}
+	if fadePart != "" {
+		parts = append(parts, fadePart)
+	}
+	parts = append(parts, overlayChain)
+	return strings.Join(parts, ";\n"), nil
 }
 
 // buildTitleDrawtexts produces one drawtext filter per title line, centered as a block.
